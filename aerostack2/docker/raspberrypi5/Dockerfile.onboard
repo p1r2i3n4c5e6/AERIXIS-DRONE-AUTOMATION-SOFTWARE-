@@ -1,0 +1,121 @@
+# syntax=docker/dockerfile:1
+# AeroStack2 rescue ONBOARD image for Raspberry Pi 5 (linux/arm64). Also builds on amd64 for a
+# bench / SITL check of the same image. Build context: repository root.
+#
+#   docker compose -f docker/raspberrypi5/compose.yaml build        (on the Pi: ~40-60 min)
+#
+# Contents: only what an aircraft runs — AS2 core, PX4 platform + px4_msgs, GNSS estimator,
+# PID speed controller, motion behaviours, BT runner, MAVLink GCS gateway, the rescue packages
+# (planner, runtime, mission manager, A8 tracker, rate gate), the Micro XRCE-DDS agent and the
+# headless onboard service with its web panel. No simulators, no simulated camera, no desktop.
+
+ARG ROS_DISTRO=humble
+
+# ------------------------------------------------------------------ build
+FROM ros:${ROS_DISTRO}-ros-base-jammy AS build
+ARG MAKE_JOBS=2
+# Packages compiled at once: 1 on the Pi (memory); more when cross-building on a laptop (2026-10-25).
+ARG COLCON_WORKERS=1
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git python3-colcon-common-extensions python3-rosdep python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Micro XRCE-DDS agent (PX4 <-> ROS 2), linked against ROS's own Fast-DDS like the laptop build.
+RUN git clone --depth 1 --branch v2.4.2 https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/agent \
+    && . /opt/ros/${ROS_DISTRO}/setup.sh \
+    && cmake -S /tmp/agent -B /tmp/agent/build -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/as2/install/px4_microxrce_agent \
+        -DUAGENT_SUPERBUILD=OFF -DUAGENT_USE_SYSTEM_FASTDDS=ON -DUAGENT_USE_SYSTEM_FASTCDR=ON \
+        -DUAGENT_LOGGER_PROFILE=OFF -DUAGENT_P2P_PROFILE=OFF -DUAGENT_SOCKETCAN_PROFILE=OFF -DUAGENT_BUILD_TESTS=OFF \
+    && cmake --build /tmp/agent/build -j${MAKE_JOBS} && cmake --install /tmp/agent/build && rm -rf /tmp/agent
+
+# AeroStack2 packages the aircraft uses. Copied (and built) before the rescue code, so a software
+# update that only touches rescue_ws rebuilds in minutes instead of recompiling AeroStack2.
+WORKDIR /opt/as2
+COPY as2_core src/as2_core
+COPY as2_msgs src/as2_msgs
+COPY as2_behaviors src/as2_behaviors
+COPY as2_motion_reference_handlers src/as2_motion_reference_handlers
+COPY as2_state_estimator src/as2_state_estimator
+COPY as2_motion_controller src/as2_motion_controller
+COPY as2_behavior_tree src/as2_behavior_tree
+COPY as2_mavlink_gateway src/as2_mavlink_gateway
+COPY as2_python_api src/as2_python_api
+COPY projects/as2_platform_pixhawk src/projects/as2_platform_pixhawk
+COPY projects/px4_msgs src/projects/px4_msgs
+# No trajectory generation (2026-10-25): nothing onboard starts it; MAVLink waypoint missions fly
+# as go_to legs (gateway use_trajectory:=false). Saves a long compile and its dependencies.
+ENV AS2_PACKAGES="as2_platform_pixhawk as2_state_estimator as2_motion_controller as2_behaviors_motion \
+as2_behavior_tree as2_mavlink_gateway as2_python_api px4_msgs"
+RUN apt-get update \
+    && (rosdep init 2>/dev/null || true) && rosdep update --rosdistro ${ROS_DISTRO} \
+    && rosdep install -y -r --rosdistro ${ROS_DISTRO} --ignore-src \
+        --from-paths $(colcon list --base-paths src --packages-up-to ${AS2_PACKAGES} --paths-only) \
+    && rm -rf /var/lib/apt/lists/*
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh \
+    && MAKEFLAGS="-j${MAKE_JOBS}" colcon build --base-paths src --packages-up-to ${AS2_PACKAGES} \
+        --parallel-workers ${COLCON_WORKERS} --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+    && rm -rf build log
+
+# Rescue overlay (its own workspace): changes most often, so it comes last.
+COPY rescue_ws/src rescue_ws/src
+COPY rescue_ws/scripts rescue_ws/scripts
+RUN rm -rf rescue_ws/src/as2_rescue_perception rescue_ws/src/*/build rescue_ws/src/*/install \
+    && . /opt/ros/${ROS_DISTRO}/setup.sh && . install/setup.sh \
+    && cd rescue_ws && MAKEFLAGS="-j${MAKE_JOBS}" colcon build --base-paths src --parallel-workers ${COLCON_WORKERS} \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF && rm -rf build log
+
+# Aircraft only (2026-10-25): no simulation or desktop parts in the Pi image. The laptop keeps
+# them for SITL. Removed: the simulated camera, the SITL / radio-hub scripts, the Tk launcher
+# window (the web panel replaces it) and the native (non-Docker) install scripts.
+RUN rm -f rescue_ws/install/as2_a8_tracker/lib/as2_a8_tracker/a8_sim_vision \
+        rescue_ws/install/as2_a8_tracker/lib/python3*/site-packages/as2_a8_tracker/sim_vision_node.py \
+        rescue_ws/scripts/sitl_mission_test.sh rescue_ws/scripts/sitl_onboard.sh rescue_ws/scripts/sitl_radio_hub.py \
+        rescue_ws/scripts/as2_pi_launcher.py rescue_ws/scripts/run_pi_launcher.sh \
+        rescue_ws/scripts/as2_pi.sh rescue_ws/scripts/open_panel.sh
+
+# Keep only package manifests from the sources (runtime rosdep reads them), drop the rest.
+RUN find src -mindepth 1 -type f ! -name package.xml -delete && find src -type d -empty -delete \
+    && find rescue_ws/src -mindepth 1 -type f ! -name package.xml ! -path '*/tracker/*' -delete || true
+
+# ------------------------------------------------------------------ runtime
+FROM ros:${ROS_DISTRO}-ros-base-jammy
+ARG ROS_DISTRO
+ENV DEBIAN_FRONTEND=noninteractive
+# Field / mobile internet drops: retry downloads instead of failing the whole build.
+RUN printf 'Acquire::Retries "8";\nAcquire::http::Timeout "30";\n' > /etc/apt/apt.conf.d/80-retries
+COPY --from=build /opt/as2 /opt/as2
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3-pip python3-venv python3-yaml python3-serial python3-psutil \
+        libgl1 libglib2.0-0 iproute2 \
+    && (rosdep init 2>/dev/null || true) && rosdep update --rosdistro ${ROS_DISTRO} \
+    && rosdep install -y -r --rosdistro ${ROS_DISTRO} --ignore-src --dependency-types exec \
+        --from-paths /opt/as2/src /opt/as2/rescue_ws/src \
+    && rm -rf /var/lib/apt/lists/* /opt/as2/src
+# MAVLink for the GCS gateway and the FC health tap, in ROS's Python (keeps ROS's numpy).
+RUN pip3 install --no-cache-dir --retries 8 "pymavlink>=2.4,<3"
+# The A8 tracker needs newer numpy/OpenCV and ncnn than ROS Humble ships: its own environment.
+RUN python3 -m venv /opt/tracker-venv \
+    && /opt/tracker-venv/bin/pip install --no-cache-dir --retries 8 --upgrade pip \
+    && /opt/tracker-venv/bin/pip install --no-cache-dir --retries 8 "numpy>=1.23,<2" \
+        "opencv-contrib-python-headless>=4.8,<4.11" "ncnn==1.0.20260526" "psutil>=5.9" \
+        "onnxruntime==1.20.1"
+# Detection models are swappable from the onboard panel (2026-10-24): uploaded models live in
+# /data/models (HOME=/data), NCNN or ONNX on the Pi 5 CPU. Hailo HEF / RKNN / TensorRT need their
+# board's runtime and stay locked in the panel on this image.
+
+ENV AS2_WORKSPACE=/opt/as2 \
+    AS2_RESCUE_WORKSPACE=/opt/as2/rescue_ws \
+    A8_TRACKER_PYTHON=/opt/tracker-venv/bin/python \
+    HOME=/data \
+    ROS_DISTRO=${ROS_DISTRO}
+# Everything that must survive a restart (settings, pairing token, staged missions, payload
+# journal, logs) lives under HOME=/data: mount a volume there.
+VOLUME ["/data"]
+WORKDIR /opt/as2
+COPY docker/raspberrypi5/entrypoint.sh /entrypoint.sh
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD python3 /opt/as2/rescue_ws/scripts/as2_onboard_service.py status >/dev/null || exit 1
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["service"]

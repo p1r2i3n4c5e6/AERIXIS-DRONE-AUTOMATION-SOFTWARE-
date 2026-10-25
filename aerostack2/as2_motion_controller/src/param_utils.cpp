@@ -1,0 +1,106 @@
+// Copyright 2023 Universidad Politécnica de Madrid
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+//    * Redistributions of source code must retain the above copyright
+//      notice, this list of conditions and the following disclaimer.
+//
+//    * Redistributions in binary form must reproduce the above copyright
+//      notice, this list of conditions and the following disclaimer in the
+//      documentation and/or other materials provided with the distribution.
+//
+//    * Neither the name of the Universidad Politécnica de Madrid nor the names
+//    of its contributors may be used to endorse or promote products derived
+//    from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+/*!*******************************************************************************************
+ *  @file       param_utils.cpp
+ *  @brief      Generic parameter utilities shared by all as2_motion_controller plugins.
+ *  @authors    Rafael Perez-Segui
+ ********************************************************************************************/
+
+#include "as2_motion_controller/param_utils.hpp"
+
+#include <cmath>
+
+namespace as2_motion_controller_param_utils
+{
+
+std::vector<double> readDoubleArray(
+  as2::Node * node,
+  const std::string & name,
+  std::size_t expected_size)
+{
+  auto values = node->getParameter<std::vector<double>>(name);
+  if (expected_size != 0 && values.size() != expected_size) {
+    RCLCPP_FATAL(
+      node->get_logger(),
+      "Parameter '%s' has size %zu, expected %zu",
+      name.c_str(), values.size(), expected_size);
+    throw rclcpp::exceptions::InvalidParameterValueException(
+            "Parameter '" + name + "' has wrong size");
+  }
+  return values;
+}
+
+std::vector<double> readDoubleArray(
+  const rclcpp::Parameter & param,
+  std::size_t expected_size)
+{
+  auto values = param.as_double_array();
+  if (expected_size != 0 && values.size() != expected_size) {
+    throw rclcpp::exceptions::InvalidParameterValueException(
+            "Parameter '" + param.get_name() + "' has size " +
+            std::to_string(values.size()) + ", expected " + std::to_string(expected_size));
+  }
+  return values;
+}
+
+Eigen::Vector3d readVector3(as2::Node * node, const std::string & name)
+{
+  const auto a = readArray<3>(node, name);
+  return Eigen::Vector3d(a[0], a[1], a[2]);
+}
+
+Eigen::Vector3d readVector3(const rclcpp::Parameter & param)
+{
+  const auto a = readArray<3>(param);
+  return Eigen::Vector3d(a[0], a[1], a[2]);
+}
+
+bool isNanSentinel(const std::vector<double> & values)
+{
+  if (values.empty()) {
+    return false;
+  }
+  for (const auto & v : values) {
+    if (!std::isnan(v)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string debugTopicName(const std::string & topic_name)
+{
+  if (topic_name.empty() || topic_name.front() == '/') {
+    return topic_name;
+  }
+  // Relative namespace every debug topic of the controller hangs from.
+  return "debug/controller/" + topic_name;
+}
+
+}  // namespace as2_motion_controller_param_utils

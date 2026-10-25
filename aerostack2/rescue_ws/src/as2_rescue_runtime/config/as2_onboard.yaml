@@ -1,0 +1,36 @@
+# AS2 core configuration for an outdoor rescue aircraft (Pixhawk/PX4 + GNSS).
+# onboard.launch.py merges the per-drone platform values (fmu_prefix, target_system_id)
+# into a copy of this file. Do not put secrets here.
+/**:
+  ros__parameters:
+    tf_timeout_threshold: 0.05
+/**:
+  platform:
+    ros__parameters:
+      cmd_freq: 100.0
+      info_freq: 10.0
+      max_thrust: 29.0
+      min_thrust: 0.15
+      external_odom: false
+      fmu_prefix: ''
+      target_system_id: 1
+  state_estimator:
+    ros__parameters:
+      plugin_name: "raw_odometry"
+      # GNSS origin: the onboard route node sets it once from the staged KML plan, on the
+      # ground, so plan coordinates and the AS2 earth frame are the same frame.
+      use_gps: true
+      set_origin_on_start: false
+      earth_to_map_height: 0.0   # earth z = height above the take-off point
+  TakeoffBehavior:
+    ros__parameters:
+      takeoff_plugin_name: "takeoff_plugin_position"
+  LandBehavior:
+    ros__parameters:
+      land_plugin_name: "land_plugin_speed"
+  GoToBehavior:
+    ros__parameters:
+      go_to_plugin_name: "go_to_plugin_position"
+  FollowPathBehavior:
+    ros__parameters:
+      follow_path_plugin_name: "follow_path_plugin_position"

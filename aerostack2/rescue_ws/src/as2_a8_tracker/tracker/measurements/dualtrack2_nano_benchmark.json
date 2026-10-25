@@ -1,0 +1,13 @@
+{
+  "reload_init": {
+    "p50_ms": 5.731748999096453,
+    "p95_ms": 5.870477550342912
+  },
+  "reuse_init": {
+    "p50_ms": 1.6672500023560133,
+    "p95_ms": 1.9039261511352377
+  },
+  "outputs_equal": true,
+  "score": 0.8536579012870789,
+  "note": "12 warm pairs, static user image; cv2 threads=2, no hardware"
+}

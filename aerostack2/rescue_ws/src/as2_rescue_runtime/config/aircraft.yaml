@@ -1,0 +1,83 @@
+# Bench profile. These flags require measured aircraft-specific qualification.
+/**/rescue_runtime:
+  ros__parameters:
+    minimum_separation_m: 10.0  # same as swarm_agent; 3 m only with RTK
+    enable_motion: false
+    allow_operator_load: false
+    overhead_envelope_verified: false
+    min_overhead_agl_m: 8.0   # Test defaults; replace with measured package envelope.
+    max_overhead_agl_m: 20.0
+/**/a8_gimbal:
+  ros__parameters:
+    camera_ip: '192.168.144.25'
+    sdk_port: 37260
+    enable_control: false
+    calibration_verified: false
+    yaw_sign: 1.0
+    pitch_sign: -1.0
+/**/rescue_geolocator:
+  ros__parameters:
+    world_frame: earth
+    rectified_input: false
+    calibration_verified: false
+    origin_verified: false
+    origin_latitude: 0.0
+    origin_longitude: 0.0
+    origin_altitude: 0.0
+    shared_target_id: ''
+    position_sigma_m: 1.0
+    angle_sigma_rad: 0.02
+/**/payload_aux_adapter:
+  ros__parameters:
+    enabled: false
+    allow_operator_load: false  # Explicit mode: operator loaded, delivery unverified.
+    actuator_set: 0  # Set 1..6 AFTER mapping Offboard Actuator Set N in PX4.
+    target_system: 0  # Actual PX4 system ID, not the GCS ID.
+    release_value: 0.0  # Calibrate servo endpoint with inert payload, props removed.
+/**/swarm_agent:
+  ros__parameters:
+    expected_peers: ['']  # Fill exact namespaces, e.g. drone1, drone2.
+    # Fleet separation: 10 m with ordinary GNSS. 3 m ONLY with RTK on every drone (cm-level fix) and
+    # a fast mesh (base station). Set the same value for rescue_runtime below (AI avoidance).
+    minimum_separation_m: 10.0
+    max_peer_age_s: 1.0
+/**/rescue_surface_estimator:
+  ros__parameters:
+    source: 'fixed'          # 'fixed' | 'range' | 'operator'
+    frame_id: 'earth'
+    fixed_surface_z: 0.0     # Only trusted with operator_verified: true.
+    sigma_m: 1.0
+    operator_verified: false # Set only after surveying the actual datum.
+    max_measurement_age_s: 0.5
+    range_topic: 'sensor_measurements/range'
+    range_calibration_verified: false
+    max_range_tilt_deg: 15.0
+/**/rescue_route_publisher:
+  ros__parameters:
+    frame_id: 'earth'
+    origin_verified: false
+    altitude_frame_verified: false
+    origin_latitude: 0.0     # Must exactly match the KML plan's common origin.
+    origin_longitude: 0.0
+    path_clear_verified: false  # Set only after the corridor is actually checked.
+/**/rescue_delivery_zone:
+  ros__parameters:
+    clearance_verified: false
+    beside_offset_m: 5.0
+/**/a8_camera_transform:
+  ros__parameters:
+    world_frame: 'earth'
+    body_frame: 'base_link'
+    optical_frame: 'camera_optical_frame'
+    mount_x: 0.0             # Measure the gimbal mount offset on the aircraft.
+    mount_y: 0.0
+    mount_z: 0.0
+    mount_roll_deg: 0.0
+    mount_pitch_deg: 0.0
+    mount_yaw_deg: 0.0
+    gimbal_yaw_sign: 1.0     # Confirm axis directions on real hardware.
+    gimbal_pitch_sign: 1.0
+    max_measurement_age_s: 0.5
+    require_gimbal: true     # A geotag needs measured attitude, not an assumption.
+    calibration_verified: false
+    attitude_reference: 'body'  # Bench verify whether SDK angles are body or world referenced.

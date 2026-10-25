@@ -1,0 +1,68 @@
+/* AERIXIS loading splash: frosted card over the app backdrop while the GCS loads.
+   The logo settles in once (A rises, swoosh sweeps across it, letters follow), then a slim
+   progress bar tracks the real loading steps (splash.js). Light + dark via the gcs.css tokens. */
+.splash{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px;
+  background:var(--backdrop);background-color:var(--bg);
+  --ink:#0B2347;--swoosh:#04A9B3;--sp-line:rgba(11,35,71,.10);
+  transition:opacity .45s ease,visibility .45s}
+:root[data-theme=dark] .splash{--ink:#F2F6FC;--swoosh:#1BC0C8;--sp-line:rgba(190,210,255,.12)}
+.splash.leaving{opacity:0;visibility:hidden;pointer-events:none}
+.splash.leaving .sp-card{transform:translateY(-6px) scale(.985)}
+.sp-card{width:min(440px,100%);padding:34px 34px 22px;border-radius:20px;border:1px solid var(--edge);
+  background:var(--glass);backdrop-filter:blur(26px) saturate(1.2);-webkit-backdrop-filter:blur(26px) saturate(1.2);
+  box-shadow:var(--shine),var(--shadow);color:var(--text);transition:transform .45s cubic-bezier(.2,.7,.2,1)}
+.sp-logo{display:block;width:230px;max-width:100%;height:auto;margin:4px auto 0;color:var(--ink);overflow:visible}
+.sp-kicker{text-align:center;margin:12px 0 0;font:500 10.5px var(--mono);letter-spacing:.34em;text-transform:uppercase;color:var(--muted);padding-left:.34em}
+.sp-status{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:28px 0 8px;font-size:12px;color:var(--muted)}
+.sp-status b{font-weight:650;color:var(--text)}
+.sp-status span{font:500 11px var(--mono);color:var(--faint)}
+.sp-bar{height:3px;border-radius:3px;background:var(--sp-line);overflow:hidden}
+.sp-bar i{display:block;height:100%;width:4%;border-radius:inherit;background:var(--swoosh);transition:width .5s cubic-bezier(.2,.7,.2,1),background-color .3s}
+.sp-steps{list-style:none;margin:16px 0 0;padding:0;display:grid;gap:7px}
+.sp-steps li{display:grid;grid-template-columns:16px 1fr auto;align-items:center;gap:10px;font-size:12px;color:var(--faint);transition:color .25s}
+.sp-steps li small{font:500 10.5px var(--mono);color:var(--faint);text-align:right;max-width:190px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sp-steps li::before{content:"";width:8px;height:8px;margin:0 4px;border-radius:50%;box-sizing:border-box;border:1.5px solid color-mix(in srgb,var(--faint) 70%,transparent);transition:background-color .25s,border-color .25s}
+.sp-steps li.run{color:var(--muted)}
+.sp-steps li.run::before{border-color:var(--swoosh);border-right-color:transparent;width:10px;height:10px;margin:0 3px;animation:sp-spin .8s linear infinite}
+.sp-steps li.ok,.sp-steps li.warn,.sp-steps li.fail{color:var(--text)}
+.sp-steps li.ok::before{background:var(--ok);border-color:var(--ok)}
+.sp-steps li.warn::before{background:var(--warn);border-color:var(--warn)}
+.sp-steps li.fail::before{background:var(--bad);border-color:var(--bad)}
+.sp-steps li.warn small{color:var(--warn)}
+.sp-steps li.fail small{color:var(--bad)}
+.sp-error{display:none;margin-top:16px;padding:12px 14px;border-radius:12px;border:1px solid color-mix(in srgb,var(--bad) 35%,transparent);
+  background:color-mix(in srgb,var(--bad) 8%,transparent);font-size:12px;color:var(--text)}
+.sp-error b{display:block;margin-bottom:3px}
+.sp-error p{margin:0;color:var(--muted)}
+.sp-actions{display:none;justify-content:flex-end;gap:8px;margin-top:12px}
+.splash.error .sp-error{display:block}
+.splash.error .sp-actions{display:flex}
+.splash.error .sp-bar i{background:var(--bad)}
+.sp-foot{display:flex;justify-content:center;margin-top:18px}
+.sp-skip{border:0;background:none;padding:2px 6px;font:500 10.5px var(--mono);color:var(--faint);cursor:pointer;border-radius:6px}
+.sp-skip:hover{color:var(--muted)}
+.splash.error .sp-foot{display:none}
+.sp-btn{height:31px;padding:0 14px;border-radius:9px;border:1px solid var(--edge);background:var(--glass-3);box-shadow:var(--shine);font-weight:650;font-size:12px;cursor:pointer;color:var(--text)}
+.sp-btn.primary{background:var(--ink);border-color:transparent;color:var(--bg)}
+:root[data-theme=dark] .sp-btn.primary{color:#0B2347}
+
+/* --- logo intro (first open in a browser session; reloads skip it, see splash.js) --- */
+.splash .aerixis-a{transform-box:fill-box;transform-origin:50% 100%;animation:sp-rise .8s cubic-bezier(.2,.7,.2,1) both}
+.splash .aerixis-swoosh{clip-path:inset(0 100% 0 0);animation:sp-sweep .75s cubic-bezier(.65,0,.25,1) .38s forwards}
+.splash .aerixis-word path{transform-box:fill-box;animation:sp-letter .55s cubic-bezier(.2,.7,.2,1) both;animation-delay:calc(.62s + var(--i) * 55ms)}
+.sp-kicker,.sp-status,.sp-bar,.sp-steps{animation:sp-fade .5s ease both}
+.sp-kicker{animation-delay:1s}
+.sp-status,.sp-bar,.sp-steps{animation-delay:.25s}
+.splash.quick .aerixis-a,.splash.quick .aerixis-word path,.splash.quick .sp-kicker,.splash.quick .sp-status,.splash.quick .sp-bar,.splash.quick .sp-steps{animation:none}
+.splash.quick .aerixis-swoosh{animation:none;clip-path:none}
+@keyframes sp-rise{from{opacity:0;transform:translateY(16px) scale(.96)}to{opacity:1;transform:none}}
+@keyframes sp-sweep{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+@keyframes sp-letter{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:none}}
+@keyframes sp-fade{from{opacity:0}to{opacity:1}}
+@keyframes sp-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){
+  .splash .aerixis-a,.splash .aerixis-word path{animation:sp-fade .3s ease both}
+  .splash .aerixis-swoosh{animation:none;clip-path:none}
+  .sp-steps li.run::before{animation:none}
+}
+@media (max-width:480px){.sp-card{padding:26px 20px 18px}.sp-logo{width:200px}}

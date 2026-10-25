@@ -1,0 +1,566 @@
+// Copyright 2023 Universidad Politécnica de Madrid
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+//    * Redistributions of source code must retain the above copyright
+//      notice, this list of conditions and the following disclaimer.
+//
+//    * Redistributions in binary form must reproduce the above copyright
+//      notice, this list of conditions and the following disclaimer in the
+//      documentation and/or other materials provided with the distribution.
+//
+//    * Neither the name of the Universidad Politécnica de Madrid nor the names of its
+//      contributors may be used to endorse or promote products derived from
+//      this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+/*!*******************************************************************************************
+ *  @file       pid_speed_controller_plugin.cpp
+ *  @brief      Speed PID controller plugin for the Aerostack framework.
+ *  @authors    Rafael Perez-Segui
+ *              Miguel Fernández Cortizas
+ ********************************************************************************************/
+
+#include "pid_speed_controller.hpp"
+
+namespace pid_speed_controller
+{
+
+// A loop with every gain at zero produces no command, whatever its structure.
+static bool usableGains(const pid_controller::PID<double> & pid)
+{
+  return !(pid.get_gains_kp().isZero() && pid.get_gains_ki().isZero() &&
+         pid.get_gains_kd().isZero());
+}
+
+static bool usableGains(const pid_1d_controller::PID<double> & pid)
+{
+  double kp, ki, kd;
+  pid.get_gains(kp, ki, kd);
+  return kp != 0.0 || ki != 0.0 || kd != 0.0;
+}
+
+void Plugin::ownInitialize()
+{
+  speed_limits_ = Eigen::Vector3d::Zero();
+
+  // Output twist frame defaults to the configured pose frame until setMode()
+  // picks something else for body frame velocity modes.
+  output_twist_frame_id_ = getDesiredPoseFrameId();
+
+  debug_desired_velocity_pub_ =
+    createDebugPublisher<geometry_msgs::msg::TwistStamped>("debug.desired_velocity_topic");
+
+  reset();
+}
+
+std::vector<std::string> Plugin::requiredParameters() const
+{
+  std::vector<std::string> required = plugin_parameters_tail_;
+  for (const auto * group : {&position_control_parameters_tail_,
+      &velocity_control_parameters_tail_,
+      &speed_in_a_plane_control_parameters_tail_,
+      &trajectory_control_parameters_tail_,
+      &yaw_control_parameters_tail_})
+  {
+    required.insert(required.end(), group->begin(), group->end());
+  }
+  return required;
+}
+
+as2_msgs::msg::ControlMode Plugin::hoverMode() const
+{
+  as2_msgs::msg::ControlMode mode;
+  mode.yaw_mode = as2_msgs::msg::ControlMode::YAW_ANGLE;
+  mode.control_mode = as2_msgs::msg::ControlMode::UNSET;
+
+  if (!usableGains(pid_yaw_handler_)) {
+    return mode;
+  }
+  if (usableGains(pid_3D_position_handler_)) {
+    mode.control_mode = as2_msgs::msg::ControlMode::POSITION;
+  } else if (use_bypass_ || usableGains(pid_3D_velocity_handler_)) {
+    // Without a position loop the hold only drives the speed to zero, so the
+    // drift is not corrected.
+    mode.control_mode = as2_msgs::msg::ControlMode::SPEED;
+  }
+  return mode;
+}
+
+void Plugin::updateParameter(const std::string & name, const rclcpp::Parameter & param)
+{
+  if (name == "proportional_limitation") {
+    proportional_limitation_ = param.as_bool();
+    return;
+  }
+  if (name == "use_bypass") {
+    use_bypass_ = param.as_bool();
+    return;
+  }
+
+  const auto dot = name.find('.');
+  const std::string controller = name.substr(0, dot);
+  const std::string subname = dot == std::string::npos ? std::string() : name.substr(dot + 1);
+
+  bool known = false;
+  if (controller == "position_control") {
+    known = updateController3DParameter(pid_3D_position_handler_, subname, param);
+  } else if (controller == "speed_control") {
+    known = updateController3DParameter(pid_3D_velocity_handler_, subname, param);
+  } else if (controller == "speed_in_a_plane_control") {
+    known = updateSpeedInAPlaneParameter(
+      pid_1D_speed_in_a_plane_handler_, pid_3D_speed_in_a_plane_handler_, subname, param);
+  } else if (controller == "trajectory_control") {
+    known = updateController3DParameter(pid_3D_trajectory_handler_, subname, param);
+  } else if (controller == "yaw_control") {
+    known = updateControllerParameter(pid_yaw_handler_, subname, param);
+  }
+
+  if (!known) {
+    RCLCPP_ERROR(getNodePtr()->get_logger(), "Unknown parameter '%s'", name.c_str());
+  }
+}
+
+void Plugin::reset()
+{
+  ControllerBase::reset();
+  resetReferences();
+  resetState();
+  resetCommands();
+  pid_yaw_handler_.reset_controller();
+  pid_3D_position_handler_.reset_controller();
+  pid_3D_velocity_handler_.reset_controller();
+  pid_3D_trajectory_handler_.reset_controller();
+}
+
+bool Plugin::onSetMode(
+  const as2_msgs::msg::ControlMode & mode_in,
+  const as2_msgs::msg::ControlMode & mode_out)
+{
+  (void)mode_out;
+
+  auto refuse = [this](const char * loop) {
+      RCLCPP_ERROR(
+        getNodePtr()->get_logger(),
+        "The %s loop has all its gains at zero, the mode cannot be served", loop);
+      return false;
+    };
+
+  if (!usableGains(pid_yaw_handler_)) {return refuse("yaw");}
+
+  switch (mode_in.control_mode) {
+    case as2_msgs::msg::ControlMode::POSITION:
+      if (!usableGains(pid_3D_position_handler_)) {return refuse("position");}
+      break;
+    case as2_msgs::msg::ControlMode::SPEED:
+      if (!use_bypass_ && !usableGains(pid_3D_velocity_handler_)) {return refuse("speed");}
+      break;
+    case as2_msgs::msg::ControlMode::SPEED_IN_A_PLANE:
+      if (!usableGains(pid_1D_speed_in_a_plane_handler_)) {
+        return refuse("speed in a plane height");
+      }
+      if (!usableGains(pid_3D_speed_in_a_plane_handler_)) {return refuse("speed in a plane");}
+      break;
+    case as2_msgs::msg::ControlMode::TRAJECTORY:
+      if (!usableGains(pid_3D_trajectory_handler_)) {return refuse("trajectory");}
+      break;
+    default:
+      break;
+  }
+
+  // The plugin works, and commands, in the frame the parameter
+  // `desired_pose_frame` configures. The platform converts from there.
+  const std::string pose_frame = getDesiredPoseFrameId();
+  setDesiredTwistFrameId(pose_frame);
+  output_twist_frame_id_ = pose_frame;
+
+  return true;
+}
+
+void Plugin::onUpdateState(
+  const geometry_msgs::msg::PoseStamped & pose_msg,
+  const geometry_msgs::msg::TwistStamped & twist_msg)
+{
+  uav_state_.position =
+    Eigen::Vector3d(pose_msg.pose.position.x, pose_msg.pose.position.y, pose_msg.pose.position.z);
+  uav_state_.velocity =
+    Eigen::Vector3d(twist_msg.twist.linear.x, twist_msg.twist.linear.y, twist_msg.twist.linear.z);
+  uav_state_.yaw.x() = as2::frame::getYawFromQuaternion(pose_msg.pose.orientation);
+}
+
+void Plugin::onUpdateReference(const geometry_msgs::msg::PoseStamped & pose_msg)
+{
+  if (getControlModeIn().control_mode == as2_msgs::msg::ControlMode::POSITION ||
+    getControlModeIn().control_mode == as2_msgs::msg::ControlMode::SPEED_IN_A_PLANE)
+  {
+    control_ref_.position = Eigen::Vector3d(
+      pose_msg.pose.position.x, pose_msg.pose.position.y,
+      pose_msg.pose.position.z);
+  }
+
+  if ((getControlModeIn().control_mode == as2_msgs::msg::ControlMode::SPEED ||
+    getControlModeIn().control_mode == as2_msgs::msg::ControlMode::POSITION ||
+    getControlModeIn().control_mode == as2_msgs::msg::ControlMode::SPEED_IN_A_PLANE) &&
+    getControlModeIn().yaw_mode == as2_msgs::msg::ControlMode::YAW_ANGLE)
+  {
+    control_ref_.yaw.x() = as2::frame::getYawFromQuaternion(pose_msg.pose.orientation);
+  }
+}
+
+void Plugin::onUpdateReference(const geometry_msgs::msg::TwistStamped & twist_msg)
+{
+  if (getControlModeIn().control_mode == as2_msgs::msg::ControlMode::POSITION) {
+    speed_limits_ = Eigen::Vector3d(
+      twist_msg.twist.linear.x, twist_msg.twist.linear.y,
+      twist_msg.twist.linear.z);
+    pid_3D_position_handler_.set_output_saturation(
+      speed_limits_, -speed_limits_,
+      proportional_limitation_);
+    pid_3D_velocity_handler_.set_output_saturation(
+      speed_limits_, -speed_limits_,
+      proportional_limitation_);
+    pid_3D_trajectory_handler_.set_output_saturation(
+      speed_limits_, -speed_limits_,
+      proportional_limitation_);
+    return;
+  }
+
+  if (getControlModeIn().control_mode != as2_msgs::msg::ControlMode::SPEED &&
+    getControlModeIn().control_mode != as2_msgs::msg::ControlMode::SPEED_IN_A_PLANE)
+  {
+    return;
+  }
+
+  control_ref_.velocity =
+    Eigen::Vector3d(twist_msg.twist.linear.x, twist_msg.twist.linear.y, twist_msg.twist.linear.z);
+
+  if (getControlModeIn().yaw_mode == as2_msgs::msg::ControlMode::YAW_SPEED) {
+    control_ref_.yaw.y() = twist_msg.twist.angular.z;
+  }
+}
+
+void Plugin::onUpdateReference(const as2_msgs::msg::TrajectorySetpoints & traj_setpoints_msg)
+{
+  if (getControlModeIn().control_mode != as2_msgs::msg::ControlMode::TRAJECTORY) {
+    return;
+  }
+
+  as2_msgs::msg::TrajectoryPoint traj_msg = traj_setpoints_msg.setpoints[0];
+
+  control_ref_.position =
+    Eigen::Vector3d(traj_msg.position.x, traj_msg.position.y, traj_msg.position.z);
+  control_ref_.velocity = Eigen::Vector3d(traj_msg.twist.x, traj_msg.twist.y, traj_msg.twist.z);
+  control_ref_.yaw.x() = traj_msg.yaw_angle;
+}
+
+
+bool Plugin::computeOutput(
+  double dt,
+  geometry_msgs::msg::PoseStamped & pose,
+  geometry_msgs::msg::TwistStamped & twist,
+  as2_msgs::msg::Thrust & thrust)
+{
+  // The handler already gates the call by state_received and
+  // motion_reference_acquired, so we don't re-check those here.
+  (void)pose;
+  (void)thrust;
+
+  resetCommands();
+
+  switch (getControlModeIn().control_mode) {
+    case as2_msgs::msg::ControlMode::POSITION: {
+        Eigen::Vector3d position_error =
+          pid_3D_position_handler_.get_error(uav_state_.position, control_ref_.position);
+        control_command_.velocity = pid_3D_position_handler_.compute_control(dt, position_error);
+        break;
+      }
+    case as2_msgs::msg::ControlMode::SPEED: {
+        if (use_bypass_) {
+          control_command_.velocity = control_ref_.velocity;
+        } else {
+          Eigen::Vector3d velocity_error =
+            pid_3D_velocity_handler_.get_error(uav_state_.velocity, control_ref_.velocity);
+          control_command_.velocity = pid_3D_velocity_handler_.compute_control(dt, velocity_error);
+        }
+        break;
+      }
+    case as2_msgs::msg::ControlMode::SPEED_IN_A_PLANE: {
+        if (use_bypass_) {
+          control_command_.velocity = control_ref_.velocity;
+        } else {
+          Eigen::Vector3d velocity_error =
+            pid_3D_speed_in_a_plane_handler_.get_error(uav_state_.velocity, control_ref_.velocity);
+          control_command_.velocity =
+            pid_3D_speed_in_a_plane_handler_.compute_control(dt, velocity_error);
+        }
+
+        double position_error = pid_1D_speed_in_a_plane_handler_.get_error(
+          uav_state_.position.z(),
+          control_ref_.position.z());
+        control_command_.velocity.z() =
+          pid_1D_speed_in_a_plane_handler_.compute_control(dt, position_error);
+
+        break;
+      }
+    case as2_msgs::msg::ControlMode::TRAJECTORY: {
+        Eigen::Vector3d position_error =
+          pid_3D_trajectory_handler_.get_error(uav_state_.position, control_ref_.position);
+        Eigen::Vector3d velocity_error =
+          pid_3D_trajectory_handler_.get_error(uav_state_.velocity, control_ref_.velocity);
+        control_command_.velocity =
+          pid_3D_trajectory_handler_.compute_control(dt, position_error, velocity_error);
+        break;
+      }
+    default: {
+        auto & clk = *getNodePtr()->get_clock();
+        RCLCPP_ERROR_THROTTLE(getNodePtr()->get_logger(), clk, 5000, "Unknown control mode");
+        return false;
+      }
+  }
+
+  switch (getControlModeIn().yaw_mode) {
+    case as2_msgs::msg::ControlMode::YAW_ANGLE: {
+        double yaw_error = as2::frame::angleMinError(control_ref_.yaw.x(), uav_state_.yaw.x());
+        control_command_.yaw_speed = pid_yaw_handler_.compute_control(dt, yaw_error);
+        break;
+      }
+    case as2_msgs::msg::ControlMode::YAW_SPEED: {
+        control_command_.yaw_speed = control_ref_.yaw.y();
+        break;
+      }
+    default: {
+        auto & clk = *getNodePtr()->get_clock();
+        RCLCPP_ERROR_THROTTLE(getNodePtr()->get_logger(), clk, 5000, "Unknown yaw mode");
+        return false;
+      }
+  }
+
+  if (debug_desired_velocity_pub_) {
+    geometry_msgs::msg::TwistStamped msg;
+    msg.header.stamp = getNodePtr()->now();
+    switch (getControlModeIn().control_mode) {
+      case as2_msgs::msg::ControlMode::POSITION: {
+          msg.header.frame_id = getDesiredPoseFrameId();
+          msg.twist.linear.x = control_command_.velocity.x();
+          msg.twist.linear.y = control_command_.velocity.y();
+          msg.twist.linear.z = control_command_.velocity.z();
+          break;
+        }
+      case as2_msgs::msg::ControlMode::SPEED_IN_A_PLANE: {
+          // XY come from the received reference; Z is the height-PID output.
+          msg.header.frame_id = getDesiredTwistFrameId();
+          msg.twist.linear.x = control_ref_.velocity.x();
+          msg.twist.linear.y = control_ref_.velocity.y();
+          msg.twist.linear.z = control_command_.velocity.z();
+          break;
+        }
+      case as2_msgs::msg::ControlMode::SPEED:
+      case as2_msgs::msg::ControlMode::TRAJECTORY:
+      default: {
+          msg.header.frame_id = getDesiredTwistFrameId();
+          msg.twist.linear.x = control_ref_.velocity.x();
+          msg.twist.linear.y = control_ref_.velocity.y();
+          msg.twist.linear.z = control_ref_.velocity.z();
+          break;
+        }
+    }
+    msg.twist.angular.z = control_command_.yaw_speed;
+    debug_desired_velocity_pub_->publish(msg);
+  }
+
+  return getOutput(twist);
+}
+
+// ===== Internal helpers =====================================================
+
+
+bool Plugin::updateControllerParameter(
+  PID_1D & _pid_handler,
+  const std::string & _parameter_name,
+  const rclcpp::Parameter & _param)
+{
+  if (_parameter_name == "reset_integral") {
+    _pid_handler.set_reset_integral_saturation_flag(_param.get_value<bool>());
+  } else if (_parameter_name == "antiwindup_cte") {
+    _pid_handler.set_anti_windup(_param.get_value<double>());
+  } else if (_parameter_name == "alpha") {
+    _pid_handler.set_alpha(_param.get_value<double>());
+  } else if (_parameter_name == "kp") {
+    double kp, ki, kd;
+    _pid_handler.get_gains(kp, ki, kd);
+    _pid_handler.set_gains(_param.get_value<double>(), ki, kd);
+  } else if (_parameter_name == "ki") {
+    double kp, ki, kd;
+    _pid_handler.get_gains(kp, ki, kd);
+    _pid_handler.set_gains(kp, _param.get_value<double>(), kd);
+  } else if (_parameter_name == "kd") {
+    double kp, ki, kd;
+    _pid_handler.get_gains(kp, ki, kd);
+    _pid_handler.set_gains(kp, ki, _param.get_value<double>());
+  } else {
+    return false;
+  }
+  return true;
+}
+
+bool Plugin::updateController3DParameter(
+  PID & _pid_handler,
+  const std::string & _parameter_name,
+  const rclcpp::Parameter & _param)
+{
+  if (_parameter_name == "reset_integral") {
+    _pid_handler.set_reset_integral_saturation_flag(_param.get_value<bool>());
+  } else if (_parameter_name == "antiwindup_cte") {
+    Eigen::Vector3d anti_windup = Eigen::Vector3d::Constant(_param.get_value<double>());
+    _pid_handler.set_anti_windup(anti_windup);
+  } else if (_parameter_name == "alpha") {
+    Eigen::Vector3d alpha = Eigen::Vector3d::Constant(_param.get_value<double>());
+    _pid_handler.set_alpha(alpha);
+  } else if (_parameter_name == "kp.x") {
+    Eigen::Vector3d current_gains = _pid_handler.get_gains_kp();
+    current_gains.x() = _param.get_value<double>();
+    _pid_handler.set_gains_kp(current_gains);
+  } else if (_parameter_name == "kp.y") {
+    Eigen::Vector3d current_gains = _pid_handler.get_gains_kp();
+    current_gains.y() = _param.get_value<double>();
+    _pid_handler.set_gains_kp(current_gains);
+  } else if (_parameter_name == "kp.z") {
+    Eigen::Vector3d current_gains = _pid_handler.get_gains_kp();
+    current_gains.z() = _param.get_value<double>();
+    _pid_handler.set_gains_kp(current_gains);
+  } else if (_parameter_name == "ki.x") {
+    Eigen::Vector3d current_gains = _pid_handler.get_gains_ki();
+    current_gains.x() = _param.get_value<double>();
+    _pid_handler.set_gains_ki(current_gains);
+  } else if (_parameter_name == "ki.y") {
+    Eigen::Vector3d current_gains = _pid_handler.get_gains_ki();
+    current_gains.y() = _param.get_value<double>();
+    _pid_handler.set_gains_ki(current_gains);
+  } else if (_parameter_name == "ki.z") {
+    Eigen::Vector3d current_gains = _pid_handler.get_gains_ki();
+    current_gains.z() = _param.get_value<double>();
+    _pid_handler.set_gains_ki(current_gains);
+  } else if (_parameter_name == "kd.x") {
+    Eigen::Vector3d current_gains = _pid_handler.get_gains_kd();
+    current_gains.x() = _param.get_value<double>();
+    _pid_handler.set_gains_kd(current_gains);
+  } else if (_parameter_name == "kd.y") {
+    Eigen::Vector3d current_gains = _pid_handler.get_gains_kd();
+    current_gains.y() = _param.get_value<double>();
+    _pid_handler.set_gains_kd(current_gains);
+  } else if (_parameter_name == "kd.z") {
+    Eigen::Vector3d current_gains = _pid_handler.get_gains_kd();
+    current_gains.z() = _param.get_value<double>();
+    _pid_handler.set_gains_kd(current_gains);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+bool Plugin::updateSpeedInAPlaneParameter(
+  PID_1D & _pid_1d_handler,
+  PID & _pid_3d_handler,
+  const std::string & _parameter_name,
+  const rclcpp::Parameter & _param)
+{
+  if (_parameter_name == "reset_integral") {
+    _pid_1d_handler.set_reset_integral_saturation_flag(_param.get_value<bool>());
+    _pid_3d_handler.set_reset_integral_saturation_flag(_param.get_value<bool>());
+  } else if (_parameter_name == "antiwindup_cte") {
+    _pid_1d_handler.set_anti_windup(_param.get_value<double>());
+    Eigen::Vector3d anti_windup = Eigen::Vector3d::Constant(_param.get_value<double>());
+    _pid_3d_handler.set_alpha(anti_windup);
+  } else if (_parameter_name == "alpha") {
+    _pid_1d_handler.set_alpha(_param.get_value<double>());
+    Eigen::Vector3d alpha = Eigen::Vector3d::Constant(_param.get_value<double>());
+    _pid_3d_handler.set_alpha(alpha);
+  } else if (_parameter_name == "height.kp") {
+    double kp, ki, kd;
+    _pid_1d_handler.get_gains(kp, ki, kd);
+    _pid_1d_handler.set_gains(_param.get_value<double>(), ki, kd);
+  } else if (_parameter_name == "height.ki") {
+    double kp, ki, kd;
+    _pid_1d_handler.get_gains(kp, ki, kd);
+    _pid_1d_handler.set_gains(kp, _param.get_value<double>(), kd);
+  } else if (_parameter_name == "height.kd") {
+    double kp, ki, kd;
+    _pid_1d_handler.get_gains(kp, ki, kd);
+    _pid_1d_handler.set_gains(kp, ki, _param.get_value<double>());
+  } else if (_parameter_name == "speed.kp.x") {
+    Eigen::Vector3d current_gains = _pid_3d_handler.get_gains_kp();
+    current_gains.x() = _param.get_value<double>();
+    _pid_3d_handler.set_gains_kp(current_gains);
+  } else if (_parameter_name == "speed.kp.y") {
+    Eigen::Vector3d current_gains = _pid_3d_handler.get_gains_kp();
+    current_gains.y() = _param.get_value<double>();
+    _pid_3d_handler.set_gains_kp(current_gains);
+  } else if (_parameter_name == "speed.ki.x") {
+    Eigen::Vector3d current_gains = _pid_3d_handler.get_gains_ki();
+    current_gains.x() = _param.get_value<double>();
+    _pid_3d_handler.set_gains_ki(current_gains);
+  } else if (_parameter_name == "speed.ki.y") {
+    Eigen::Vector3d current_gains = _pid_3d_handler.get_gains_ki();
+    current_gains.y() = _param.get_value<double>();
+    _pid_3d_handler.set_gains_ki(current_gains);
+  } else if (_parameter_name == "speed.kd.x") {
+    Eigen::Vector3d current_gains = _pid_3d_handler.get_gains_kd();
+    current_gains.x() = _param.get_value<double>();
+    _pid_3d_handler.set_gains_kd(current_gains);
+  } else if (_parameter_name == "speed.kd.y") {
+    Eigen::Vector3d current_gains = _pid_3d_handler.get_gains_kd();
+    current_gains.y() = _param.get_value<double>();
+    _pid_3d_handler.set_gains_kd(current_gains);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+void Plugin::resetState() {uav_state_ = UAV_state();}
+
+void Plugin::resetReferences()
+{
+  control_ref_.position = uav_state_.position;
+  control_ref_.velocity = Eigen::Vector3d::Zero();
+  control_ref_.yaw = uav_state_.yaw;
+}
+
+void Plugin::resetCommands()
+{
+  control_command_.velocity = Eigen::Vector3d::Zero();
+  control_command_.yaw_speed = 0.0;
+}
+
+bool Plugin::getOutput(geometry_msgs::msg::TwistStamped & _twist_msg)
+{
+  _twist_msg.header.frame_id = output_twist_frame_id_;
+
+  _twist_msg.twist.linear.x = control_command_.velocity.x();
+  _twist_msg.twist.linear.y = control_command_.velocity.y();
+  _twist_msg.twist.linear.z = control_command_.velocity.z();
+
+  _twist_msg.twist.angular.x = 0;
+  _twist_msg.twist.angular.y = 0;
+  _twist_msg.twist.angular.z = control_command_.yaw_speed;
+  return true;
+}
+
+}  // namespace pid_speed_controller
+
+#include <pluginlib/class_list_macros.hpp>
+PLUGINLIB_EXPORT_CLASS(
+  pid_speed_controller::Plugin,
+  as2_motion_controller_plugin_base::ControllerBase)

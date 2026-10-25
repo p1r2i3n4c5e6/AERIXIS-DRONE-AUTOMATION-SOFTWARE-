@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>as2_mavlink_gateway</name>
+  <version>0.1.0</version>
+  <description>Routes standard MAVLink GCS missions and controls through Aerostack2.</description>
+  <maintainer email="cvar.upm3@gmail.com">CVAR-UPM</maintainer>
+  <license>BSD-3-Clause</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>as2_msgs</exec_depend>
+  <exec_depend>as2_python_api</exec_depend>
+  <exec_depend>as2_platform_pixhawk</exec_depend>
+  <exec_depend>as2_state_estimator</exec_depend>
+  <exec_depend>as2_motion_controller</exec_depend>
+  <exec_depend>as2_behaviors_motion</exec_depend>
+  <!-- as2_behaviors_trajectory_generation: only as2_stack.launch.py (laptop full stack) starts it;
+       the onboard Pi flies MAVLink waypoint missions with go_to (use_trajectory:=false), so the
+       Pi image does not build it (2026-10-25). -->
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>px4_msgs</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

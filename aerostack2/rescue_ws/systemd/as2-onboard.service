@@ -1,0 +1,19 @@
+# AERIXIS core onboard (platform, estimator, controller, behaviours, rescue runtime), mission manager,
+# GCS telemetry gateway, mesh and camera, supervised by as2_onboard_service.py.
+[Unit]
+Description=AERIXIS rescue: AERIXIS core, mission manager, GCS gateway, mesh, camera
+Wants=as2-fc-guardian.service
+After=as2-fc-guardian.service
+PartOf=as2-rescue.target
+
+[Service]
+User=@USER@
+Environment=AS2_STATUS_FILE=/tmp/as2-onboard-status.json
+EnvironmentFile=-/etc/default/as2-rescue
+ExecStart=/usr/bin/python3 @RESCUE@/scripts/as2_onboard_service.py run --skip fc,guardian
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=30
+
+[Install]
+WantedBy=as2-rescue.target

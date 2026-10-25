@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<!-- Bench observation only: no arming, flight, gimbal or payload commands. -->
+<root BTCPP_format="4" main_tree_to_execute="PersonObservation">
+  <BehaviorTree ID="PersonObservation">
+    <Timeout msec="10000">
+      <RetryUntilSuccessful num_attempts="-1">
+        <Delay delay_msec="100">
+          <IsPersonDetected topic="perception/detections" max_age_s="0.5" min_confidence="0.35"/>
+        </Delay>
+      </RetryUntilSuccessful>
+    </Timeout>
+  </BehaviorTree>
+</root>

@@ -1,0 +1,128 @@
+// Copyright 2025 Universidad Politécnica de Madrid
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+//    * Redistributions of source code must retain the above copyright
+//      notice, this list of conditions and the following disclaimer.
+//
+//    * Redistributions in binary form must reproduce the above copyright
+//      notice, this list of conditions and the following disclaimer in the
+//      documentation and/or other materials provided with the distribution.
+//
+//    * Neither the name of the Universidad Politécnica de Madrid nor the names of its
+//      contributors may be used to endorse or promote products derived from
+//      this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+/**
+ * @file as2_interface.cpp
+ *
+ * As2MultirotorSimulatorInterface class implementation
+ *
+ * @author Rafael Perez-Segui <r.psegui@upm.es>
+ */
+
+#include "as2_platform_multirotor_simulator/as2_interface.hpp"
+
+#include "as2_core/core_functions.hpp"
+#include "as2_core/utils/frame_utils.hpp"
+#include "as2_core/utils/tf_utils.hpp"
+#include "as2_core/utils/control_mode_utils.hpp"
+
+namespace as2_platform_multirotor_simulator
+{
+
+As2MultirotorSimulatorInterface::As2MultirotorSimulatorInterface(
+  as2::Node * node_ptr)
+: node_ptr_(node_ptr)
+{
+  // Declared, read and namespaced once by as2::Node, for the whole stack
+  frame_id_earth_ = node_ptr->getEarthFrameId();
+  frame_id_odom_ = node_ptr->getOdomFrameId();
+  frame_id_baselink_ = node_ptr->getBaseFrameId();
+
+  using_odom_for_control_ = node_ptr_->getParameter<bool>("use_odom_for_control");
+  // Initial position
+  initial_position_.x() = node_ptr_->getParameter<double>("vehicle_initial_pose.x");
+  initial_position_.y() = node_ptr_->getParameter<double>("vehicle_initial_pose.y");
+  initial_position_.z() = node_ptr_->getParameter<double>("vehicle_initial_pose.z");
+  // Initial orientation
+  double roll, pitch, yaw;
+  yaw = node_ptr_->getParameter<double>("vehicle_initial_pose.yaw");
+  pitch = node_ptr_->getParameter<double>("vehicle_initial_pose.pitch");
+  roll = node_ptr_->getParameter<double>("vehicle_initial_pose.roll");
+  as2::frame::eulerToQuaternion(roll, pitch, yaw, initial_orientation_);
+  initial_orientation_ = initial_orientation_.normalized();
+}
+
+void As2MultirotorSimulatorInterface::convertToOdom(
+  const Kinematics & kinematics, nav_msgs::msg::Odometry & odometry,
+  const builtin_interfaces::msg::Time & current_time)
+{
+  odometry.header.stamp = current_time;
+  odometry.header.frame_id = frame_id_odom_;
+  odometry.child_frame_id = frame_id_baselink_;
+  odometry.pose.pose.position.x = kinematics.position.x();
+  odometry.pose.pose.position.y = kinematics.position.y();
+  odometry.pose.pose.position.z = kinematics.position.z();
+  odometry.pose.pose.orientation.w = kinematics.orientation.w();
+  odometry.pose.pose.orientation.x = kinematics.orientation.x();
+  odometry.pose.pose.orientation.y = kinematics.orientation.y();
+  odometry.pose.pose.orientation.z = kinematics.orientation.z();
+  Eigen::Vector3d odom_linear_velocity_body =
+    as2::frame::transform(
+    kinematics.orientation.inverse(), kinematics.linear_velocity);
+  odometry.twist.twist.linear.x = odom_linear_velocity_body.x();
+  odometry.twist.twist.linear.y = odom_linear_velocity_body.y();
+  odometry.twist.twist.linear.z = odom_linear_velocity_body.z();
+  odometry.twist.twist.angular.x = kinematics.angular_velocity.x();
+  odometry.twist.twist.angular.y = kinematics.angular_velocity.y();
+  odometry.twist.twist.angular.z = kinematics.angular_velocity.z();
+  return;
+}
+
+void As2MultirotorSimulatorInterface::convertToGroundTruth(
+  const Kinematics & kinematics, geometry_msgs::msg::PoseStamped & ground_truth_pose,
+  geometry_msgs::msg::TwistStamped & ground_truth_twist,
+  const builtin_interfaces::msg::Time & current_time)
+{
+  // Convert to ground truth
+  Eigen::Vector3d gt_linear_velocity_body =
+    as2::frame::transform(kinematics.orientation.inverse(), kinematics.linear_velocity);
+
+  // Ground truth pose
+  ground_truth_pose.header.stamp = current_time;
+  ground_truth_pose.header.frame_id = frame_id_earth_;
+  ground_truth_pose.pose.position.x = kinematics.position.x();
+  ground_truth_pose.pose.position.y = kinematics.position.y();
+  ground_truth_pose.pose.position.z = kinematics.position.z();
+  ground_truth_pose.pose.orientation.w = kinematics.orientation.w();
+  ground_truth_pose.pose.orientation.x = kinematics.orientation.x();
+  ground_truth_pose.pose.orientation.y = kinematics.orientation.y();
+  ground_truth_pose.pose.orientation.z = kinematics.orientation.z();
+
+  // Ground truth twist
+  ground_truth_twist.header.stamp = current_time;
+  ground_truth_twist.header.frame_id = frame_id_baselink_;
+  ground_truth_twist.twist.linear.x = gt_linear_velocity_body.x();
+  ground_truth_twist.twist.linear.y = gt_linear_velocity_body.y();
+  ground_truth_twist.twist.linear.z = gt_linear_velocity_body.z();
+  ground_truth_twist.twist.angular.x = kinematics.angular_velocity.x();
+  ground_truth_twist.twist.angular.y = kinematics.angular_velocity.y();
+  ground_truth_twist.twist.angular.z = kinematics.angular_velocity.z();
+  return;
+}
+
+}   // namespace as2_platform_multirotor_simulator

@@ -1,0 +1,94 @@
+<root BTCPP_format="4" main_tree_to_execute="Mission">
+  <BehaviorTree ID="Mission">
+    <RecoverThenFail>
+      <Sequence>
+        <Timeout name="WaitForVehicleHealthy" msec="10000">
+          <RetryUntilSuccessful num_attempts="-1">
+            <Delay delay_msec="100">
+              <VehicleHealthy />
+            </Delay>
+          </RetryUntilSuccessful>
+        </Timeout>
+        <SafetyGate flag="VehicleHealthy">
+          <Sequence name="FlightLifecycle">
+            <Offboard service_name="set_offboard_mode" />
+            <Arm service_name="set_arming_state" />
+            <ManagedTakeoff height="15" speed="0.5" timeout_s="90" />
+            <ForceSuccess>
+              <SetGimbalSearch pitch_deg="-45.0" timeout_s="6" />
+            </ForceSuccess>
+            <Timeout name="WaitForVisionHealthy" msec="10000">
+              <RetryUntilSuccessful num_attempts="-1">
+                <Delay delay_msec="200">
+                  <VisionHealthy />
+                </Delay>
+              </RetryUntilSuccessful>
+            </Timeout>
+            <ReactiveFallback name="SearchAndGeotag">
+              <Sequence name="PersonIncident">
+                <HumanDetected />
+                <ForceFailure>
+                  <Fallback>
+                    <Sequence name="GeotagResponse">
+                      <CheckpointCoverage />
+                      <PauseCoverage timeout_s="15" />
+                      <ApproachOverhead speed="1.0" lost_timeout_s="3.0" timeout_s="240" />
+                      <GeotagOverhead timeout_s="5" />
+                      <ForceSuccess name="DropIfLoaded">
+                        <Sequence>
+                          <PayloadAvailable />
+                          <Timeout msec="10000">
+                            <RetryUntilSuccessful num_attempts="-1">
+                              <Delay delay_msec="100">
+                                <StableFor seconds="1">
+                                  <OverheadTarget />
+                                </StableFor>
+                              </Delay>
+                            </RetryUntilSuccessful>
+                          </Timeout>
+                          <DropPayload timeout_s="5" />
+                          <ReportPayloadOutcome timeout_s="5" />
+                        </Sequence>
+                      </ForceSuccess>
+                      <ReleaseTargetLock suppress_s="8.0" timeout_s="5" />
+                      <ForceSuccess>
+                        <SetGimbalSearch pitch_deg="-45.0" timeout_s="6" />
+                      </ForceSuccess>
+                      <ResumeCoverage timeout_s="300" />
+                      <CompleteRescue />
+                    </Sequence>
+                    <Sequence name="LostPersonRecovery">
+                      <PauseCoverage timeout_s="15" />
+                      <ReleaseTargetLock suppress_s="8.0" timeout_s="5" />
+                      <ForceSuccess>
+                        <SetGimbalSearch pitch_deg="-45.0" timeout_s="6" />
+                      </ForceSuccess>
+                      <ReportObservation />
+                      <ResumeCoverage timeout_s="300" />
+                      <CompleteRescue />
+                    </Sequence>
+                  </Fallback>
+                </ForceFailure>
+              </Sequence>
+              <Sequence name="CheckpointedCoverage">
+                <SurveyWaypoint segment_id="leg_0" pose="0;0;15" speed="0.5" timeout_s="600" swarm_id="shared-mission-group" />
+                <SurveyWaypoint segment_id="leg_1" pose="20;0;15" speed="0.5" timeout_s="600" swarm_id="shared-mission-group" />
+                <SurveyWaypoint segment_id="leg_2" pose="20;20;15" speed="0.5" timeout_s="600" swarm_id="shared-mission-group" />
+              </Sequence>
+            </ReactiveFallback>
+            <ReturnToLaunch speed="2.0" timeout_s="900" />
+            <ManagedLand speed="0.5" timeout_s="120" />
+            <Disarm service_name="set_arming_state" />
+          </Sequence>
+        </SafetyGate>
+      </Sequence>
+      <Fallback name="Recovery">
+        <Sequence name="ReturnAndLand">
+          <ReturnToLaunch speed="2.0" timeout_s="900" />
+          <ManagedLand speed="0.5" timeout_s="120" />
+        </Sequence>
+        <RequestRecovery timeout_s="15" />
+      </Fallback>
+    </RecoverThenFail>
+  </BehaviorTree>
+</root>

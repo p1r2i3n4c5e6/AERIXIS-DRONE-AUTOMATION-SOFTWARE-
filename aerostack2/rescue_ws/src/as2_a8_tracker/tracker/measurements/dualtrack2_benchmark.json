@@ -1,0 +1,28 @@
+{
+  "host": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+  "machine": "x86_64",
+  "opencv": "5.0.0",
+  "ncnn": "1.0.20260526",
+  "threads": 2,
+  "input_size": 512,
+  "iterations": 40,
+  "tensor_max_abs_delta": 0.0,
+  "detection_max_abs_delta": 0.0,
+  "detection_count_mismatches": 0,
+  "detections_in_last_image": 1,
+  "note": "One static image; not an accuracy, live FPS, or hardware-response test.",
+  "legacy": {
+    "total_p50_ms": 91.35859299567528,
+    "total_p95_ms": 94.26363929887884,
+    "pre_ms_p50": 0.8881534995452967,
+    "infer_ms_p50": 90.29234500121675,
+    "post_ms_p50": 0.17988699983106926
+  },
+  "native": {
+    "total_p50_ms": 91.23189149977406,
+    "total_p95_ms": 96.49933850414517,
+    "pre_ms_p50": 0.7435304978571367,
+    "infer_ms_p50": 90.29797599941958,
+    "post_ms_p50": 0.1737334969220683
+  }
+}

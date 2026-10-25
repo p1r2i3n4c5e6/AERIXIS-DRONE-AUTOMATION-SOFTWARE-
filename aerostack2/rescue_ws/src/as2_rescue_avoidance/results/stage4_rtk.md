@@ -1,0 +1,49 @@
+Rules: rtk (separation 3 m, GNSS sigma 0.05 m). Seeds per family: 200. Episodes: 9000. Wall time: 113 s. "<3 m": episodes where the true distance between two drones went below the fleet separation; "collisions": centres below 1 m. "detour": largest distance from the planned line (the width a pass costs).
+
+| policy | link | family | collisions | <3 m | completed | aborted | closest (m) | 1% (m) | detour mean/max (m) | time x ideal | right passes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| learned | base_station | blocker | 0/200 | 0/200 | 200/200 | 0 | 4.64 | 4.73 | 2.4/9.47 | 0.97 | 75% |
+| learned | base_station | crossing | 0/200 | 0/200 | 200/200 | 0 | 4.73 | 4.74 | 3.6/5.5 | 0.96 | 95% |
+| learned | base_station | head_on | 0/200 | 0/200 | 200/200 | 0 | 4.82 | 4.93 | 3.0/3.34 | 0.96 | 100% |
+| learned | base_station | overtaking | 0/200 | 0/200 | 200/200 | 0 | 4.61 | 4.67 | 5.0/5.73 | 0.95 | 52% |
+| learned | base_station | random | 0/200 | 0/200 | 200/200 | 0 | 4.5 | 4.53 | 3.1/8.75 | 0.98 | 59% |
+| learned | edge | blocker | 0/200 | 0/200 | 200/200 | 0 | 5.35 | 5.48 | 3.1/11.21 | 0.99 | 75% |
+| learned | edge | crossing | 0/200 | 0/200 | 200/200 | 0 | 5.92 | 6.01 | 5.3/11.66 | 0.99 | 92% |
+| learned | edge | head_on | 0/200 | 0/200 | 200/200 | 0 | 6.49 | 6.5 | 5.3/9.04 | 0.98 | 100% |
+| learned | edge | overtaking | 0/200 | 0/200 | 200/200 | 0 | 5.14 | 5.37 | 6.7/12.83 | 1.0 | 57% |
+| learned | edge | random | 0/200 | 0/200 | 200/200 | 0 | 4.67 | 4.85 | 4.8/13.06 | 1.0 | 59% |
+| learned | lora | blocker | 0/200 | 0/200 | 200/200 | 0 | 5.53 | 5.84 | 4.1/16.25 | 1.01 | 75% |
+| learned | lora | crossing | 0/200 | 0/200 | 200/200 | 0 | 6.5 | 6.88 | 5.7/14.07 | 1.0 | 94% |
+| learned | lora | head_on | 0/200 | 0/200 | 200/200 | 0 | 6.76 | 7.33 | 6.1/12.1 | 0.98 | 100% |
+| learned | lora | overtaking | 0/200 | 0/200 | 200/200 | 0 | 5.59 | 5.6 | 7.2/13.09 | 1.05 | 70% |
+| learned | lora | random | 0/200 | 0/200 | 200/200 | 0 | 5.06 | 5.56 | 5.8/24.8 | 1.01 | 58% |
+| orca | base_station | blocker | 0/200 | 0/200 | 200/200 | 0 | 4.6 | 4.71 | 2.1/8.27 | 0.99 | 72% |
+| orca | base_station | crossing | 0/200 | 0/200 | 200/200 | 0 | 4.72 | 4.79 | 3.4/4.96 | 0.98 | 94% |
+| orca | base_station | head_on | 0/200 | 0/200 | 200/200 | 0 | 4.78 | 4.8 | 2.8/3.38 | 0.99 | 100% |
+| orca | base_station | overtaking | 0/200 | 0/200 | 200/200 | 0 | 4.63 | 4.65 | 4.7/6.42 | 0.98 | 54% |
+| orca | base_station | random | 0/200 | 0/200 | 200/200 | 0 | 4.39 | 4.5 | 3.5/12.84 | 0.99 | 63% |
+| orca | edge | blocker | 0/200 | 0/200 | 200/200 | 0 | 5.1 | 5.43 | 3.0/10.4 | 1.0 | 75% |
+| orca | edge | crossing | 0/200 | 0/200 | 200/200 | 0 | 5.72 | 6.05 | 5.2/11.53 | 1.01 | 88% |
+| orca | edge | head_on | 0/200 | 0/200 | 200/200 | 0 | 5.9 | 6.21 | 5.4/9.19 | 0.99 | 99% |
+| orca | edge | overtaking | 0/200 | 0/200 | 200/200 | 0 | 5.15 | 5.22 | 6.2/11.33 | 1.04 | 65% |
+| orca | edge | random | 0/200 | 0/200 | 200/200 | 0 | 4.5 | 4.96 | 5.5/14.67 | 1.0 | 61% |
+| orca | lora | blocker | 0/200 | 0/200 | 200/200 | 0 | 5.36 | 5.96 | 4.1/17.4 | 1.01 | 72% |
+| orca | lora | crossing | 0/200 | 0/200 | 200/200 | 0 | 6.69 | 6.85 | 5.8/14.1 | 1.01 | 92% |
+| orca | lora | head_on | 0/200 | 0/200 | 200/200 | 0 | 6.84 | 7.34 | 6.4/12.88 | 1.0 | 100% |
+| orca | lora | overtaking | 0/200 | 0/200 | 200/200 | 0 | 5.27 | 5.32 | 7.3/12.79 | 1.1 | 76% |
+| orca | lora | random | 0/200 | 0/200 | 200/200 | 0 | 5.42 | 5.56 | 6.7/27.42 | 1.01 | 62% |
+| stop_gate | base_station | blocker | 0/200 | 0/200 | 125/200 | 109 | 3.55 | 3.61 | 0.1/0.16 | 0.99 | 63% |
+| stop_gate | base_station | crossing | 0/200 | 0/200 | 0/200 | 392 | 3.36 | 3.43 | 0.1/0.17 | - | 50% |
+| stop_gate | base_station | head_on | 0/200 | 0/200 | 0/200 | 400 | 3.27 | 3.31 | 0.1/0.17 | - | 51% |
+| stop_gate | base_station | overtaking | 0/200 | 0/200 | 0/200 | 221 | 3.53 | 3.56 | 0.1/0.16 | - | 50% |
+| stop_gate | base_station | random | 0/200 | 10/200 | 60/200 | 326 | 2.72 | 2.84 | 0.1/0.2 | 0.99 | 50% |
+| stop_gate | edge | blocker | 0/200 | 0/200 | 69/200 | 162 | 4.15 | 4.38 | 0.1/0.18 | 0.99 | 57% |
+| stop_gate | edge | crossing | 0/200 | 0/200 | 0/200 | 371 | 3.83 | 3.97 | 0.1/0.25 | - | 48% |
+| stop_gate | edge | head_on | 0/200 | 0/200 | 0/200 | 400 | 3.73 | 3.8 | 0.1/0.21 | - | 51% |
+| stop_gate | edge | overtaking | 0/200 | 0/200 | 0/200 | 215 | 4.95 | 5.14 | 0.1/0.18 | - | 51% |
+| stop_gate | edge | random | 0/200 | 0/200 | 25/200 | 464 | 3.5 | 3.62 | 0.1/0.16 | 0.99 | 52% |
+| stop_gate | lora | blocker | 0/200 | 0/200 | 55/200 | 177 | 4.83 | 5.06 | 0.1/0.18 | 0.99 | 54% |
+| stop_gate | lora | crossing | 0/200 | 0/200 | 0/200 | 375 | 4.67 | 4.72 | 0.1/0.2 | - | 48% |
+| stop_gate | lora | head_on | 0/200 | 0/200 | 0/200 | 400 | 4.29 | 4.49 | 0.1/0.18 | - | 51% |
+| stop_gate | lora | overtaking | 0/200 | 0/200 | 0/200 | 205 | 6.88 | 6.98 | 0.1/0.18 | - | 50% |
+| stop_gate | lora | random | 0/200 | 0/200 | 10/200 | 532 | 4.29 | 4.43 | 0.1/0.21 | 0.99 | 50% |

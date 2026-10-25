@@ -1,0 +1,35 @@
+repositories:
+#----------------------------------------------------------------------------
+# Projects
+#----------------------------------------------------------------------------
+
+  projects/gazebo:
+    type: git 
+    url: https://github.com/aerostack2/project_gazebo.git
+    version: main
+
+  projects/crazyflie:
+    type: git 
+    url: https://github.com/aerostack2/project_crazyflie.git
+    version: main
+
+  projects/px4_vision:
+    type: git 
+    url: https://github.com/aerostack2/project_px4_vision.git
+    version: 22d945c956ae234839b3c48555ab2c1ba40eaee3
+
+  projects/as2_platform_pixhawk:
+    type: git
+    url: https://github.com/aerostack2/as2_platform_pixhawk.git
+    version: fcba062219935acef69dfa009c8be376c707ee8a
+
+  projects/px4_msgs:
+    type: git
+    url: https://github.com/PX4/px4_msgs.git
+    version: 392e831c1f659429ca83902e66820d7094591410  # release/1.16 (PX4 v1.16 FCs, 2026-10-24; was v1.14 ffb6e80e)
+
+
+  projects/dji_osdk:
+    type: git 
+    url: https://github.com/aerostack2/project_dji_osdk.git
+    version: main

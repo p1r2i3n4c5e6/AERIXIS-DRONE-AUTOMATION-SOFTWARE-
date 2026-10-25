@@ -1,0 +1,34 @@
+# Only sources the onboard image builds. (BuildKit reads <Dockerfile>.dockerignore.)
+.git
+.github
+.agents
+.claude
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+build/
+install/
+log/
+rescue_ws/build/
+rescue_ws/install/
+rescue_ws/log/
+rescue_ws/src/as2_rescue_perception/
+rescue_ws/tests/
+as2_simulation_assets/
+as2_user_interfaces/
+projects/px4_vision/
+projects/gazebo/
+projects/crazyflie/
+projects/dji_osdk/
+docs/
+scratch/
+RASPI5_DEPLOYMENT_PACKAGE/
+integrations/
+**/*.ulg
+**/*.bag
+**/*.mcap
+# Aircraft only (2026-10-25): tests, evaluation results and SITL tools stay on the laptop.
+rescue_ws/src/*/test/
+rescue_ws/src/as2_a8_tracker/tracker/tests/
+rescue_ws/src/as2_rescue_avoidance/results/
+rescue_ws/scripts/sitl_*

@@ -1,0 +1,201 @@
+// Copyright 2023 Universidad Politécnica de Madrid
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+//    * Redistributions of source code must retain the above copyright
+//      notice, this list of conditions and the following disclaimer.
+//
+//    * Redistributions in binary form must reproduce the above copyright
+//      notice, this list of conditions and the following disclaimer in the
+//      documentation and/or other materials provided with the distribution.
+//
+//    * Neither the name of the Universidad Politécnica de Madrid nor the names
+//    of its contributors may be used to endorse or promote products derived
+//    from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+/*!*******************************************************************************************
+ *  @file       param_utils.hpp
+ *  @brief      Generic parameter utilities shared by all as2_motion_controller plugins.
+ *  @authors    Rafael Perez-Segui
+ ********************************************************************************************/
+
+#ifndef AS2_MOTION_CONTROLLER__PARAM_UTILS_HPP_
+#define AS2_MOTION_CONTROLLER__PARAM_UTILS_HPP_
+
+#include <Eigen/Dense>  // NOLINT(build/include_order)
+#include <cstddef>
+#include <cstdint>
+#include <algorithm>
+#include <array>
+#include <string>
+#include <vector>
+#include <rclcpp/exceptions.hpp>
+#include <rclcpp/logging.hpp>
+#include <as2_core/node.hpp>
+#include <rclcpp/parameter.hpp>
+
+namespace as2_motion_controller_param_utils
+{
+
+/**
+ * @brief Read a scalar parameter of type T from the node.
+ *
+ * @deprecated Kept for out-of-tree controller plugins. Call
+ * as2::Node::getParameter directly instead.
+ *
+ * @tparam T Parameter type.
+ * @param node Pointer to the aerostack2 node.
+ * @param name Fully-qualified parameter name.
+ * @return Parameter value of type T.
+ */
+template<typename T>
+[[deprecated("use as2::Node::getParameter")]]
+T readParam(as2::Node * node, const std::string & name)
+{
+  return node->getParameter<T>(name);
+}
+
+/**
+ * @brief Read a fixed-size double array parameter into std::array<double, N>.
+ *
+ * The runtime size is checked against the compile-time N. A size mismatch is
+ * treated as fatal: the function logs RCLCPP_FATAL and throws
+ * rclcpp::exceptions::InvalidParameterValueException so the controller does
+ * not silently run with a half-configured solver.
+ *
+ * @tparam N Expected number of elements in the array.
+ * @param node Pointer to the aerostack2 node.
+ * @param name Fully-qualified parameter name.
+ * @return Fixed-size std::array<double, N> with the values.
+ */
+template<std::size_t N>
+std::array<double, N> readArray(as2::Node * node, const std::string & name)
+{
+  const auto values = node->getParameter<std::vector<double>>(name);
+  if (values.size() != N) {
+    RCLCPP_FATAL(
+      node->get_logger(),
+      "Parameter '%s' has size %zu, expected %zu",
+      name.c_str(), values.size(), N);
+    throw rclcpp::exceptions::InvalidParameterValueException(
+            "Parameter '" + name + "' has wrong size");
+  }
+  std::array<double, N> out{};
+  std::copy_n(values.begin(), N, out.begin());
+  return out;
+}
+
+/**
+ * @brief Read a variable-size double array parameter.
+ *
+ * If expected_size != 0, the size is validated and a mismatch is fatal
+ * (RCLCPP_FATAL + throw). When expected_size == 0, any size is accepted.
+ *
+ * @param node Pointer to the aerostack2 node.
+ * @param name Fully-qualified parameter name.
+ * @param expected_size Expected number of elements, or 0 to skip the check.
+ * @return Vector with the parameter values.
+ */
+std::vector<double> readDoubleArray(
+  as2::Node * node,
+  const std::string & name,
+  std::size_t expected_size = 0);
+
+/**
+ * @brief Read a double array from a delivered parameter, optionally checking its size.
+ *
+ * The parameter callback runs before the node commits the new value, so a
+ * plugin reacting to a change has to read the delivered parameter and not the
+ * node.
+ *
+ * @param param Parameter delivered to the plugin.
+ * @param expected_size Expected number of elements, zero to accept any size.
+ * @return Values of the parameter.
+ * @throw rclcpp::exceptions::InvalidParameterValueException if the size does not match.
+ */
+std::vector<double> readDoubleArray(
+  const rclcpp::Parameter & param,
+  std::size_t expected_size = 0);
+
+/**
+ * @brief Read a fixed-size double array from a delivered parameter.
+ *
+ * @tparam N Expected number of elements in the array.
+ * @param param Parameter delivered to the plugin.
+ * @return Fixed-size std::array<double, N> with the values.
+ * @throw rclcpp::exceptions::InvalidParameterValueException if the size is not N.
+ */
+template<std::size_t N>
+std::array<double, N> readArray(const rclcpp::Parameter & param)
+{
+  const auto values = readDoubleArray(param, N);
+  std::array<double, N> out{};
+  std::copy_n(values.begin(), N, out.begin());
+  return out;
+}
+
+/**
+ * @brief Read a 3-component double array parameter as Eigen::Vector3d.
+ *
+ * @param node Pointer to the aerostack2 node.
+ * @param name Fully-qualified parameter name.
+ * @return Eigen::Vector3d with the values.
+ */
+Eigen::Vector3d readVector3(as2::Node * node, const std::string & name);
+
+/**
+ * @brief Read a 3-component double array from a delivered parameter.
+ *
+ * The parameter callback runs before the node commits the new value, so a
+ * plugin reacting to a change has to read the delivered parameter and not the
+ * node.
+ *
+ * @param param Parameter delivered to the plugin.
+ * @return Eigen::Vector3d with the values.
+ * @throw rclcpp::exceptions::InvalidParameterValueException if the size is not 3.
+ */
+Eigen::Vector3d readVector3(const rclcpp::Parameter & param);
+
+/**
+ * @brief True if every element of values is NaN.
+ *
+ * Used as a sentinel for "intentionally empty" optional double-array
+ * parameters (e.g. unconstrained limits in MPC plugins). The YAML keeps a
+ * non-empty array because ROS 2 forbids empty array overrides.
+ *
+ * @param values Array values to test.
+ * @return true if values is non-empty and every element is NaN.
+ */
+bool isNanSentinel(const std::vector<double> & values);
+
+/**
+ * @brief Prefix a configured debug topic with the controller debug namespace.
+ *
+ * Rules applied:
+ *  - An empty name disables the topic, and is returned empty.
+ *  - A name starting with '/' is global and is returned as is, so a topic can
+ *    be placed outside the namespace of the drone.
+ *  - Any other name hangs from `debug/controller/`, which keeps the debug
+ *    output of every controller plugin under one relative branch.
+ *
+ * @param topic_name Topic name as the configuration file provides it.
+ * @return Topic name to create the publisher with, empty when disabled.
+ */
+std::string debugTopicName(const std::string & topic_name);
+
+}  // namespace as2_motion_controller_param_utils
+
+#endif  // AS2_MOTION_CONTROLLER__PARAM_UTILS_HPP_

@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>as2_ground_control</name>
+  <version>0.1.0</version>
+  <description>Local web GCS for simulation missions routed through the AS2 MAVLink gateway.</description>
+  <maintainer email="cvar.upm3@gmail.com">CVAR-UPM</maintainer>
+  <license>BSD-3-Clause</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

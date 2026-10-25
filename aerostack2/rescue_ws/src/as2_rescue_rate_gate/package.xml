@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>as2_rescue_rate_gate</name>
+  <version>0.1.0</version>
+  <description>Forwards high-rate topics (pose, twist, IMU, PX4 position, tf per frame) at a lower
+    rate for the Python rescue nodes, so they do not spend the Pi's CPU on 100 Hz input.</description>
+  <maintainer email="rajkumarprince4507@gmail.com">AERIXIS</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>tf2_msgs</depend>
+  <!-- Types forwarded by name at run time (generic subscription). -->
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>px4_msgs</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

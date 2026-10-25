@@ -1,0 +1,57 @@
+diff --git a/ROMFS/px4fmu_common/init.d-posix/CMakeLists.txt b/ROMFS/px4fmu_common/init.d-posix/CMakeLists.txt
+index 0772ccdc..b7422977 100644
+--- a/ROMFS/px4fmu_common/init.d-posix/CMakeLists.txt
++++ b/ROMFS/px4fmu_common/init.d-posix/CMakeLists.txt
+@@ -36,6 +36,7 @@ add_subdirectory(airframes)
+ px4_add_romfs_files(
+ 	px4-rc.mavlink
+ 	px4-rc.simulator
++	px4-rc.as2
+ 	px4-rc.gzsim
+ 	px4-rc.jmavsim
+ 	px4-rc.mavlinksim
+diff --git a/ROMFS/px4fmu_common/init.d-posix/rcS b/ROMFS/px4fmu_common/init.d-posix/rcS
+index fed292b9..65a06f86 100644
+--- a/ROMFS/px4fmu_common/init.d-posix/rcS
++++ b/ROMFS/px4fmu_common/init.d-posix/rcS
+@@ -239,6 +239,9 @@ then
+ 	exit 1
+ fi
+ 
++# AeroStack2 / AERIXIS SITL parameters (laptop simulation only; px4-rc.as2)
++[ -e "${R}etc/init.d-posix/px4-rc.as2" ] && . px4-rc.as2
++
+ dataman start
+ 
+ # only start the simulator if not in replay mode, as both control the lockstep time
+diff --git a/ROMFS/px4fmu_common/init.d-posix/px4-rc.as2 b/ROMFS/px4fmu_common/init.d-posix/px4-rc.as2
+new file mode 100644
+index 00000000..9d97d080
+--- /dev/null
++++ b/ROMFS/px4fmu_common/init.d-posix/px4-rc.as2
+@@ -0,0 +1,25 @@
++# AS2 SITL Simulation parameters
++param set EKF2_GPS_CHECK 0
++param set COM_ARM_WO_GPS 1
++param set COM_DISARM_PRFLT -1
++param set CBRK_IO_SAFETY 22027
++param set MAV_0_REMOTE_PRT 14560
++param set CBRK_SUPPLY_CHK 894281
++param set COM_LOW_BAT_ACT 0
++param set NAV_RCL_ACT 0
++param set COM_RC_IN_MODE 1
++param set COM_OF_LOSS_T 10.0
++param set COM_OBL_RC_ACT 0
++param set SIM_BAT_DRAIN 0
++param set SIM_BAT_MIN_PCT 100
++
++# Optional SITL home location (3_launch_simulation.sh: SITL_HOME="lat,lon[,alt]"),
++# e.g. fly the simulation over the real operating area instead of PX4's default (Zurich).
++if [ -n "$SITL_HOME_LAT" ]
++then
++	param set SIM_GZ_HOME_LAT $SITL_HOME_LAT
++	param set SIM_GZ_HOME_LON $SITL_HOME_LON
++	param set SIM_GZ_HOME_ALT ${SITL_HOME_ALT:-0}
++fi
++# PX4 1.16: gz_x500 sets NAV_DLL_ACT 2, and arming then needs a GCS heartbeat on the FC itself
++param set NAV_DLL_ACT 0

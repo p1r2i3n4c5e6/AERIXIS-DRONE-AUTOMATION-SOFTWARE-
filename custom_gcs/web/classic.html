@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AERIXIS · Rescue Mission Control (classic)</title>
+  <link rel="icon" type="image/svg+xml" href="/ui/brand/aerixis-icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  
+  <!-- CSS Stylesheets -->
+  <link rel="stylesheet" href="/vendor/leaflet.css">
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/ros_inspector.css">
+  <link rel="stylesheet" href="/css/fleet.css">
+  <link rel="stylesheet" href="/css/designer.css">
+  <link rel="stylesheet" href="/css/interface.css">
+  <link rel="stylesheet" href="/css/workspace.css?v=crystal1">
+  <link rel="stylesheet" href="/css/hybrid.css?v=crystal1">
+  <link rel="stylesheet" href="/css/industrial.css?v=crystal1">
+  <link rel="stylesheet" href="/css/contrast.css?v=crystal1">
+  <link rel="stylesheet" href="/css/spectrum.css?v=crystal1">
+  <link rel="stylesheet" href="/css/crystal.css?v=crystal1">
+</head>
+<body class="fleet-view">
+
+  <!-- TOP HEADER -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon" style="background:none;box-shadow:none;padding:0;overflow:hidden"><img src="/ui/brand/aerixis-icon.svg" alt="" style="width:100%;height:100%;display:block"></div>
+      <div>AERIXIS <span>Mission Control</span></div>
+    </div>
+
+    <!-- Legacy single-aircraft telemetry controls, shown outside Fleet -->
+    <div class="mode-bar">
+      <button id="mode-offboard-btn" class="mode-btn" onclick="sendMode('offboard')" title="AERIXIS Autonomous Behaviors Active">
+        ⚡ OFFBOARD (AERIXIS)
+      </button>
+      <button id="mode-position-btn" class="mode-btn" onclick="sendMode('position')" title="Manual Position Hold (AERIXIS Locked)">
+        🎯 POSITION
+      </button>
+      <button id="mode-altitude-btn" class="mode-btn" onclick="sendMode('altitude')" title="Manual Altitude Hold (AERIXIS Locked)">
+        ⛰️ ALTITUDE
+      </button>
+      <button id="mode-manual-btn" class="mode-btn" onclick="sendMode('manual')" title="Full Manual (AERIXIS Locked)">
+        🕹️ MANUAL
+      </button>
+    </div>
+
+    <!-- VIEW TABS -->
+    <div class="view-tabs">
+      <button id="tab-fleet-btn" class="view-tab-btn active" onclick="switchView('fleet')">◈ Fleet</button>
+      <button id="tab-map-btn" class="view-tab-btn" onclick="switchView('map')">
+        🗺️ Map & Flight
+      </button>
+      <button id="tab-designer-btn" class="view-tab-btn" onclick="switchView('designer')">⑂ Mission Designer</button>
+      <button id="tab-tree-btn" class="view-tab-btn" onclick="switchView('tree')">
+        Behavior studio
+      </button>
+      <button id="tab-logs-btn" class="view-tab-btn" onclick="switchView('logs')">
+        📋 BT Execution Logs
+      </button>
+      <button id="tab-xml-btn" class="view-tab-btn" onclick="switchView('xml')">
+        📡 Radio Mission & XML
+      </button>
+    </div>
+
+    <!-- HEADER RIGHT (ROS INSPECTOR + ONE-CLICK DEMO + TELEMETRY LINK) -->
+    <div class="header-right">
+      <button class="btn-inspector-trigger" onclick="openRosInspector()" title="Inspect all active ROS 2 nodes and controllers">
+        🔍 Local ROS Monitor
+      </button>
+      <!-- SIMULATION MODE TOGGLE (SITL vs REAL HARDWARE) -->
+      <div class="sim-toggle-pill" id="sim-toggle-pill" title="Toggle between Local SITL Simulation and Physical Drone Telemetry Radio">
+        <label class="sim-switch">
+          <input type="checkbox" id="sim-mode-toggle-checkbox" checked onchange="onSimulationToggleChanged(this.checked)">
+          <span class="sim-slider"></span>
+        </label>
+        <div class="sim-text-box">
+          <span class="sim-state-text" id="sim-mode-status-text">SIMULATION: ON</span>
+          <span class="sim-sub-text" id="sim-mode-sub-text">Local SITL transport selected</span>
+        </div>
+      </div>
+
+
+      <div class="pill" id="conn-pill" onclick="openConnModal()" title="Configure Telemetry Radio or UDP Link">
+        <span class="dot" id="mav-dot"></span>
+        <span id="conn-summary-text">UDP: 127.0.0.1:14550</span>
+      </div>
+      <button class="primary" style="padding:5px 10px;font-size:11.5px;" onclick="openConnModal()">
+        ⚙️ Connect
+      </button>
+    </div>
+    <div id="interface-tools"></div>
+  </header>
+
+  <!-- MAIN WRAPPER FOR VIEWS -->
+  <div class="main-wrapper">
+    <div id="view-designer" class="tab-view">
+      <main class="designer-workspace">
+        <div class="fleet-heading"><div><div class="eyebrow">MISSION ENGINEERING / BEHAVIORTREE.CPP</div><h1>Build the mission. <span>See every decision.</span></h1><p>Choose a template, edit its hierarchy and ports, then validate the exact XML onboard.</p></div><div class="designer-actions"><button id="designer-import">Import XML</button><input id="designer-file" type="file" accept=".xml" hidden><button id="designer-download">Save XML</button><button id="designer-to-fleet" class="fleet-primary">Assign to aircraft ↗</button></div></div>
+        <div class="designer-template glass-panel"><label>Mission template<select id="designer-template"><option value="waypoints">Normal waypoint mission</option><option value="surveillance">Surveillance / observation</option><option value="search_geotag">Search + human geotagging</option><option value="rescue_delivery">Search + rescue aid delivery</option><option value="waypoint_delivery">Planned waypoint payload delivery</option><option value="swarm_search">Swarm search + geotagging</option><option value="swarm_delivery">Swarm rescue + payload delivery</option></select></label><button id="designer-load-template">Load template</button><button id="designer-use-waypoints">Use map waypoints</button><span id="designer-registry-source">Loading installed node catalog…</span></div>
+        <div class="designer-notice" id="designer-notice" role="status">Templates retain onboard safety gates. Required sensors, route approvals and hardware profiles must be available before execution.</div>
+        <div class="designer-grid">
+          <aside class="glass-panel node-library"><div class="panel-title"><h2>Executable node library</h2><span id="designer-node-count" class="tiny-label"></span></div><input id="designer-search" placeholder="Search nodes and use cases" aria-label="Search nodes"><select id="designer-category" aria-label="Node category"><option value="all">All categories</option><option>Action</option><option>Condition</option><option>Decorator</option><option>Control</option><option>SubTree</option></select><div id="designer-library"></div></aside>
+          <section class="glass-panel"><div class="panel-title"><h2>Tree hierarchy</h2><select id="designer-definition" aria-label="Behavior tree definition"></select><span id="designer-instance-count" class="tiny-label"></span></div><div class="designer-tree-actions"><button id="designer-up">↑ Move</button><button id="designer-down">↓ Move</button><button id="designer-remove">Remove node</button><button id="designer-wrap">Wrap in Sequence</button></div><div id="designer-tree" role="tree" aria-label="Editable behavior tree"></div></section>
+          <aside class="glass-panel designer-properties"><div class="panel-title"><h2>Node details & ports</h2></div><div id="designer-properties"></div></aside>
+        </div>
+        <div class="designer-bottom"><section class="glass-panel"><div class="panel-title"><h2>3D mission structure</h2><span class="tiny-label">DRAG TO ROTATE · SCROLL TO ZOOM</span></div><div id="designer-3d"></div></section><section class="glass-panel"><div class="panel-title"><h2>Generated XML</h2><button id="designer-copy">Copy XML</button></div><textarea id="designer-xml" readonly spellcheck="false" aria-label="Generated mission XML"></textarea></section></div>
+      </main>
+    </div>
+    <div id="view-fleet" class="tab-view active">
+      <main class="fleet-workspace">
+        <div class="fleet-heading">
+          <div><div class="eyebrow"><span class="signal-dot"></span> AERIXIS / OPERATIONS</div><h1>Your fleet. <span>One clear view.</span></h1><p>Plan on the ground. Execute onboard. Stay informed.</p></div>
+          <div class="fleet-heading-actions"><span class="system-pill" id="fleet-api-state"><i class="spinner"></i> Connecting to GCS</span><button class="fleet-primary" id="add-aircraft">＋ Add aircraft</button></div>
+        </div>
+        <div class="fleet-metrics">
+          <article><span class="metric-icon">◉</span><div><small>AIRCRAFT CONNECTED</small><strong id="fleet-connected">0 <em>/ 0</em></strong></div><span class="metric-note">Onboard links</span></article>
+          <article><span class="metric-icon purple">⌘</span><div><small>ROS NODES DISCOVERED</small><strong id="fleet-ros-total">—</strong></div><span class="metric-note">Fresh reports only</span></article>
+          <article><span class="metric-icon teal">⑂</span><div><small>BT NODES RUNNING</small><strong id="fleet-bt-total">—</strong></div><span class="metric-note">Actual executor state</span></article>
+          <article><span class="metric-icon amber">△</span><div><small>ATTENTION NEEDED</small><strong id="fleet-attention">0</strong></div><span class="metric-note">Links & mission errors</span></article>
+        </div>
+        <div class="fleet-columns">
+          <aside class="glass-panel aircraft-panel"><div class="panel-title"><h2>Aircraft</h2><span class="tiny-label" id="aircraft-count">0 REGISTERED</span></div><div id="fleet-aircraft-list" class="aircraft-list"></div><div class="aircraft-foot"><span class="signal-dot"></span> Independent onboard execution</div></aside>
+          <section class="glass-panel mission-panel">
+            <div id="fleet-empty" class="fleet-empty"><div class="radar"><div class="radar-sweep"></div><div class="radar-ring"></div><svg viewBox="0 0 100 100" aria-hidden="true"><path d="M35 35L65 65M65 35L35 65"/><circle cx="28" cy="28" r="15"/><circle cx="72" cy="28" r="15"/><circle cx="28" cy="72" r="15"/><circle cx="72" cy="72" r="15"/><rect x="39" y="39" width="22" height="22" rx="7"/></svg></div><span class="eyebrow">READY WHEN YOU ARE</span><h2>A clear view of every aircraft.</h2><p>Add an onboard mission manager to see its connection,<br>behavior tree and ROS nodes here.</p><button class="fleet-primary" id="empty-add-aircraft">＋ Connect your first aircraft</button><div class="empty-flow"><span>Plan mission</span><b>→</b><span>Upload XML</span><b>→</b><span>Execute onboard</span></div></div>
+            <div id="fleet-selected" hidden>
+              <div class="selected-header"><div><span class="eyebrow" id="selected-endpoint">ONBOARD EXECUTOR</span><h2 id="selected-label">Aircraft</h2></div><span id="selected-connection" class="connection-badge">UNKNOWN</span></div>
+              <div class="selected-stats"><div><small>ROS nodes</small><b id="selected-ros-count">—</b></div><div><small>BT running / total</small><b id="selected-bt-count">—</b></div><div><small>Execution</small><b id="selected-mission-state">No mission</b></div><div><small>Last report</small><b id="selected-age">—</b></div></div>
+              <div class="fleet-subtabs" role="tablist" aria-label="Aircraft details"><button class="active" data-panel="mission">Mission</button><button data-panel="tree">Live tree</button><button data-panel="nodes">ROS nodes</button></div>
+              <div id="detail-mission" class="detail-panel">
+                <div class="mission-route"><span class="route-step">01 <b>Upload</b></span><i></i><span class="route-step">02 <b>Verify</b></span><i></i><span class="route-step">03 <b>Start onboard</b></span></div>
+                <div class="upload-zone"><div class="upload-icon">↥</div><div><h3>Give this aircraft its mission.</h3><p>Choose a BehaviorTree.CPP XML file or use your current studio plan.</p></div><div class="upload-actions"><button id="choose-mission">Choose XML</button><button onclick="switchView('designer')">Mission Designer ↗</button><button id="use-studio-mission" class="quiet-button">Use studio tree ↗</button></div><input type="file" id="mission-file" accept=".xml,text/xml,application/xml" hidden></div>
+                <label class="xml-preview-label" for="fleet-xml">MISSION XML <span id="xml-file-label">No file selected</span></label><textarea id="fleet-xml" spellcheck="false" placeholder="Your mission XML will appear here. It is validated by the onboard executor before starting."></textarea>
+                <div class="revision-line"><span>ONBOARD REVISION</span><code id="selected-revision">Nothing uploaded</code><span id="selected-policy">—</span></div>
+                <div id="rescue-health-strip" class="mission-notice">Rescue supervisor status unavailable.</div><div id="mission-notice" class="mission-notice" role="status">Upload and start are separate actions.</div>
+                <div class="mission-buttons"><button id="stage-mission" class="fleet-primary">↥ Upload & validate</button><button id="start-onboard" class="fleet-success" disabled>▷ Start onboard</button><button id="cancel-onboard" class="fleet-danger" disabled>■ Cancel mission</button><button id="reconcile-onboard" hidden>Verify ground state</button></div>
+              </div>
+              <div id="detail-tree" class="detail-panel" hidden><div class="tree-toolbar"><span><i class="signal-dot"></i> Reported onboard tree</span><span class="tiny-label">DRAG TO PAN · SCROLL TO ZOOM</span></div><p id="bt-registry-counts" class="nodes-note"></p><div class="fleet-tree-switch"><button id="fleet-show-2d" type="button" aria-pressed="true">2D live tree</button><button id="fleet-show-3d" type="button" aria-pressed="false">3D live tree</button></div><p id="fleet-3d-status" class="nodes-note" hidden></p><div id="fleet-tree-3d" hidden></div><div id="live-tree-canvas" class="live-tree-canvas"><p class="quiet-empty">The actual tree appears when execution starts.</p></div><div class="tree-legend"><span class="legend-running">Running</span><span class="legend-success">Success</span><span class="legend-failure">Failure</span><span>Idle / skipped</span></div></div>
+              <div id="detail-nodes" class="detail-panel" hidden><div class="nodes-note">Nodes discovered in this aircraft’s ROS namespace. Discovery does not by itself prove component health.</div><div id="live-ros-nodes" class="live-ros-nodes"></div></div>
+            </div>
+          </section>
+          <aside class="glass-panel activity-panel"><div class="panel-title"><h2>Activity</h2><span class="live-label"><i class="signal-dot"></i> LIVE</span></div><div class="activity-tools"><select id="activity-filter" aria-label="Filter activity"><option value="all">All events</option><option value="errors">Warnings & errors</option><option value="selected">Selected aircraft</option></select><button id="clear-activity" class="quiet-button" title="Clear displayed activity">Clear</button></div><div id="fleet-activity" class="activity-feed" aria-live="polite"></div><div class="activity-foot">Connection • Mission • Recovery</div></aside>
+        </div>
+        <footer class="fleet-footer"><span><i class="signal-dot"></i> LAPTOP GCS <b>→</b> ONBOARD AERIXIS + BT <b>→</b> PX4</span><span id="fleet-update-time">Waiting for fleet status</span></footer>
+      </main>
+    </div>
+
+    <!-- VIEW 1: MAP & FLIGHT TELEMETRY -->
+    <div id="view-map" class="tab-view">
+      <aside class="sidebar">
+        <!-- MODE & AERIXIS STATUS -->
+        <section class="card">
+          <div class="card-head">
+            <h2>Flight Control Authority</h2>
+            <span class="card-badge" id="authority-badge" style="color:var(--green)">OFFBOARD ACTIVE</span>
+          </div>
+          <div class="status-row"><span>Active Flight Mode</span><b class="val" id="disp-mode-text" style="color:var(--cyan)">OFFBOARD</b></div>
+          <div class="status-row"><span>AERIXIS Autonomy Engine</span><b class="val" id="disp-as2-text" style="color:var(--green)">ENABLED</b></div>
+
+          <!-- AERIXIS LOCKOUT WARNING -->
+          <div class="mode-warning-box" id="mode-warning-box">
+            <span>⚠️</span>
+            <small><b>AERIXIS AUTONOMY LOCKED</b><br>Vehicle is in manual/pilot assist mode. All AERIXIS autonomous actions are disabled. Switch to <b>OFFBOARD</b> to re-enable.</small>
+          </div>
+        </section>
+
+        <!-- DECOUPLED ARCHITECTURE LINK PIPELINE -->
+        <section class="card architecture-pipeline-card">
+          <div class="card-head">
+            <div>
+              <h2>System Architecture Link</h2>
+              <div class="card-subhead">Decoupled GCS ➔ AERIXIS Gateway ➔ Micro-XRCE-DDS ➔ PX4</div>
+            </div>
+            <button class="card-badge" style="border:none;cursor:pointer;background:rgba(56,189,248,0.15);color:var(--cyan);" onclick="openRosInspector()" title="Inspect the AERIXIS core ROS 2 nodes">
+              Core nodes →
+            </button>
+          </div>
+
+          <!-- Overall Pipeline Banner -->
+          <div class="pipeline-overall-banner status-offline" id="pipeline-banner">
+            <span class="pipeline-banner-icon" id="pipeline-banner-icon">🔍</span>
+            <div class="pipeline-banner-info">
+              <b id="pipeline-banner-title">SEARCHING FOR AERIXIS CORE</b>
+              <small id="pipeline-banner-detail">GCS listening on UDP 14551. Launch the AERIXIS core (./2_launch_as2.sh)</small>
+            </div>
+            <span class="pipeline-banner-badge" id="pipeline-banner-badge">OFFLINE</span>
+          </div>
+
+          <!-- Hidden legacy badges for backward compatibility -->
+          <span id="stack-overall-badge" style="display:none">OFFLINE</span>
+          <span id="gw-link-val" style="display:none">OFFLINE</span>
+          <span id="px4-link-val" style="display:none">OFFLINE</span>
+
+          <!-- 3-Tier Pipeline Visualizer -->
+          <div class="pipeline-tiers-container">
+
+            <!-- TIER 1: GCS Studio -->
+            <div class="pipeline-tier-box tier-gcs" id="tier-box-gcs">
+              <div class="tier-icon">💻</div>
+              <div class="tier-body">
+                <div class="tier-title-row">
+                  <span class="tier-name">GCS Studio (Laptop)</span>
+                  <span class="tier-badge badge-active" id="tier-badge-gcs">STANDALONE ACTIVE</span>
+                </div>
+                <div class="tier-sub" id="tier-sub-gcs">Operator Station · Listening on UDP :14551</div>
+              </div>
+            </div>
+
+            <!-- INTER-TIER LINK 1: MAVLink Telemetry -->
+            <div class="pipeline-link-channel link-searching" id="channel-link1">
+              <div class="channel-line-wrapper">
+                <div class="channel-line" id="line-link1"></div>
+                <div class="channel-pulse-dot" id="dot-link1"></div>
+                <div class="channel-scanner-wave" id="scanner-link1"></div>
+              </div>
+              <div class="channel-info-box">
+                <div class="channel-header">
+                  <span class="channel-proto">MAVLink Telemetry</span>
+                  <span class="channel-rate-badge badge-rate-muted" id="link1-rate-badge">0.0 Hz</span>
+                </div>
+                <div class="channel-detail" id="link1-detail">Scanning for the AERIXIS core on UDP 127.0.0.1:14550...</div>
+              </div>
+            </div>
+
+            <!-- TIER 2: AERIXIS Core -->
+            <div class="pipeline-tier-box tier-as2 tier-offline" id="tier-box-as2">
+              <div class="tier-icon">🚁</div>
+              <div class="tier-body">
+                <div class="tier-title-row">
+                  <span class="tier-name">AERIXIS Core</span>
+                  <span class="tier-badge badge-offline" id="tier-badge-as2">✕ OFFLINE</span>
+                </div>
+                <div class="tier-sub" id="tier-sub-as2">Platform · Estimator · Behaviors · Trajectory</div>
+                <div class="tier-extra-info" id="tier-extra-as2">Run ./2_launch_as2.sh to launch the AERIXIS core</div>
+              </div>
+            </div>
+
+            <!-- INTER-TIER LINK 2: Micro-XRCE-DDS Bridge -->
+            <div class="pipeline-link-channel link-offline" id="channel-link2">
+              <div class="channel-line-wrapper">
+                <div class="channel-line" id="line-link2"></div>
+                <div class="channel-pulse-dot" id="dot-link2"></div>
+                <div class="channel-scanner-wave" id="scanner-link2"></div>
+              </div>
+              <div class="channel-info-box">
+                <div class="channel-header">
+                  <span class="channel-proto">Micro-XRCE-DDS Bridge</span>
+                  <span class="channel-rule-badge">AERIXIS ↔ Autopilot Only (No Direct GCS)</span>
+                </div>
+                <div class="channel-detail" id="link2-detail">Micro-XRCE-DDS middleware bridge inactive</div>
+              </div>
+            </div>
+
+            <!-- TIER 3: PX4 Autopilot / Flight Controller -->
+            <div class="pipeline-tier-box tier-px4 tier-offline" id="tier-box-px4">
+              <div class="tier-icon">🎮</div>
+              <div class="tier-body">
+                <div class="tier-title-row">
+                  <span class="tier-name">PX4 Flight Controller</span>
+                  <span class="tier-badge badge-offline" id="tier-badge-px4">✕ DISCONNECTED</span>
+                </div>
+                <div class="tier-sub" id="tier-sub-px4">Gazebo SITL / Pixhawk Hardware</div>
+                <div class="tier-extra-info" id="tier-extra-px4">Connected strictly via AERIXIS Micro-XRCE-DDS</div>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- FLIGHT TELEMETRY -->
+        <section class="card">
+          <div class="card-head"><h2>Vehicle Status</h2><span class="card-badge" id="armed-badge">Disarmed</span></div>
+          <div class="status-row"><span>Armed State</span><b class="val" id="armed-text">False</b></div>
+          <div class="status-row"><span>Altitude (AGL)</span><b class="val" id="alt-text">0.00 m</b></div>
+          <div class="status-row"><span>GPS Coordinates</span><b class="val" id="gps-text">0.0000, 0.0000</b></div>
+        </section>
+
+        <!-- DATA TRANSFER & TELEMETRY TRAFFIC CARD -->
+        <section class="card traffic-card">
+          <div class="card-head">
+            <h2>📡 Telemetry & Mission Data Transfer</h2>
+            <span class="card-badge" id="traffic-link-badge" style="color:var(--cyan)">MAVLink v2</span>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+            <!-- Upload Box -->
+            <div style="background:rgba(14,165,233,0.08);border:1px solid rgba(14,165,233,0.25);border-radius:6px;padding:8px;">
+              <div style="font-size:10px;text-transform:uppercase;color:var(--cyan);font-weight:700;display:flex;align-items:center;justify-content:space-between;">
+                <span>⬆️ Upload (TX)</span>
+                <span id="tx-rate-badge" style="font-size:9.5px;color:#94a3b8;">0.0 KB/s</span>
+              </div>
+              <div style="font-size:18px;font-weight:800;color:#f0f6fc;margin:4px 0 2px;" id="disp-tx-kb">0.0 <span style="font-size:11px;font-weight:normal;color:#94a3b8;">KB</span></div>
+              <div style="font-size:10px;color:#8b9eb5;" id="disp-tx-packets">0 pkts sent</div>
+            </div>
+
+            <!-- Download Box -->
+            <div style="background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.25);border-radius:6px;padding:8px;">
+              <div style="font-size:10px;text-transform:uppercase;color:var(--green);font-weight:700;display:flex;align-items:center;justify-content:space-between;">
+                <span>⬇️ Download (RX)</span>
+                <span id="rx-rate-badge" style="font-size:9.5px;color:#94a3b8;">0.0 KB/s</span>
+              </div>
+              <div style="font-size:18px;font-weight:800;color:#f0f6fc;margin:4px 0 2px;" id="disp-rx-kb">0.0 <span style="font-size:11px;font-weight:normal;color:#94a3b8;">KB</span></div>
+              <div style="font-size:10px;color:#8b9eb5;" id="disp-rx-packets">0 pkts rcvd</div>
+            </div>
+          </div>
+
+          <div class="status-row" style="font-size:11px;padding:3px 0;">
+            <span>Mission BT XML Payload</span>
+            <b class="val" id="disp-bt-xml-size" style="color:var(--cyan)">0.0 KB</b>
+          </div>
+          <div class="status-row" style="font-size:11px;padding:3px 0;">
+            <span>Telemetry Link Rate</span>
+            <b class="val" id="disp-hb-hz">0.0 Hz</b>
+          </div>
+        </section>
+
+
+        <!-- QUICK FLIGHT ACTIONS -->
+        <section class="card">
+          <div class="card-head"><h2>Flight Commands</h2></div>
+          <div class="btn-row">
+            <button id="arm-btn" onclick="sendCmd('arm')">🛡️ Arm</button>
+            <button id="disarm-btn" onclick="sendCmd('disarm')">🛑 Disarm</button>
+          </div>
+          <div class="btn-row" style="margin-top:6px;">
+            <button id="takeoff-btn" class="primary as2-action-btn" onclick="sendCmd('takeoff', 2.0)">🛫 Takeoff (2m)</button>
+            <button id="land-btn" class="as2-action-btn" onclick="sendCmd('land')">🛬 Land</button>
+          </div>
+          <button id="offboard-trig-btn" style="margin-top:6px;" onclick="sendMode('offboard')">⚡ Switch to Offboard</button>
+        </section>
+
+        <!-- KML FILE & MISSION PLANNER -->
+        <section class="card">
+          <div class="card-head">
+            <h2>🗺️ KML Area & Mission Plan</h2>
+            <span class="card-badge" id="kml-wp-count-badge">0 Waypoints</span>
+          </div>
+
+          <div style="display:flex;gap:8px;margin-bottom:8px;">
+            <div style="flex:1;">
+              <label for="mission-alt" style="font-size:10.5px;color:var(--muted);display:block;margin-bottom:2px;">Flight Alt (AGL)</label>
+              <div style="display:flex;align-items:center;gap:4px;">
+                <input id="mission-alt" type="number" min="0.5" max="50" step="0.5" value="2.5" style="width:100%;padding:5px 6px;background:var(--card);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:11.5px;">
+                <span style="font-size:10px;color:var(--muted);font-weight:600;">m</span>
+              </div>
+            </div>
+            <div style="flex:1;">
+              <label for="survey-spacing" style="font-size:10.5px;color:var(--muted);display:block;margin-bottom:2px;">Scan Lane Spacing</label>
+              <div style="display:flex;align-items:center;gap:4px;">
+                <input id="survey-spacing" type="number" min="2" max="40" step="1" value="6" onchange="autoRegenerateCoverageIfActive()" style="width:100%;padding:5px 6px;background:var(--card);border:1px solid var(--line);border-radius:6px;color:var(--text);font-size:11.5px;">
+                <span style="font-size:10px;color:var(--muted);font-weight:600;">m</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="btn-row">
+            <button id="draw-area-btn" onclick="toggleDrawKmlArea()">✏️ Draw Fence</button>
+            <button id="add-waypoints-btn" onclick="toggleAddKmlWaypoints()">📍 Manual WPs</button>
+          </div>
+
+          <button id="gen-survey-btn" class="as2-action-btn" style="width:100%;margin-top:6px;background:rgba(56,189,248,0.12);color:var(--cyan);border:1px solid rgba(56,189,248,0.35);padding:6px;font-size:11px;font-weight:600;" onclick="generateAreaCoverageFromBoundary()">
+            📐 Auto-Generate Scan Grid inside Fence
+          </button>
+
+          <div class="btn-row" style="margin-top:6px;">
+            <button id="load-kml-btn" class="primary" onclick="triggerKmlFileInput()">📂 Load KML</button>
+            <button id="save-kml-btn" onclick="exportKmlFile()">💾 Save KML</button>
+            <button id="clear-kml-btn" style="color:var(--red);" onclick="clearKmlPlan()">🗑️ Clear</button>
+          </div>
+          <input id="kml-file-input" type="file" accept=".kml,application/xml,text/xml" style="display:none;" onchange="handleKmlFileUpload(event)">
+
+          <!-- SYNC TO BEHAVIOR TREE & EXECUTE -->
+          <button id="sync-bt-btn" class="primary as2-action-btn" style="width:100%;margin-top:10px;font-weight:700;padding:8px;" onclick="convertKmlToBehaviorTreeAndExecute()">
+            🌳 Generate BT Trajectory & Run
+          </button>
+        </section>
+
+        <!-- MISSION PROGRESS & LIVE BEHAVIOR TREE STEP TRACKER -->
+        <section class="card" id="mission-progress-card">
+          <div class="card-head">
+            <h2>Live BT Mission Tracker</h2>
+            <span class="card-badge" id="mission-status-badge">Standby</span>
+          </div>
+
+          <div class="status-row">
+            <span>Overall Status</span>
+            <b class="val" id="mission-msg-text">Idle</b>
+          </div>
+
+          <!-- PROGRESS BAR -->
+          <div style="margin: 7px 0 4px 0;">
+            <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted);margin-bottom:3px;">
+              <span id="bt-progress-step-text">Step 0 of 0</span>
+              <span id="bt-progress-pct-text">0%</span>
+            </div>
+            <div style="height:6px;background:rgba(255,255,255,0.08);border-radius:4px;overflow:hidden;">
+              <div id="bt-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg, #0284c7, #10b981);transition:width 0.3s ease;"></div>
+            </div>
+          </div>
+
+          <!-- STEP-BY-STEP LIVE LIST -->
+          <div class="live-steps-container" id="live-steps-container">
+            <div class="live-step-item pending"><span style="display:flex;align-items:center;gap:6px;"><span>⚡</span><span>1. Set Offboard Mode</span></span><span class="step-badge">WAITING</span></div>
+            <div class="live-step-item pending"><span style="display:flex;align-items:center;gap:6px;"><span>🛡️</span><span>2. Arm Drone Motors</span></span><span class="step-badge">WAITING</span></div>
+            <div class="live-step-item pending"><span style="display:flex;align-items:center;gap:6px;"><span>🛫</span><span>3. Autonomous Takeoff</span></span><span class="step-badge">WAITING</span></div>
+            <div class="live-step-item pending"><span style="display:flex;align-items:center;gap:6px;"><span>📍</span><span>4. Navigate Trajectory</span></span><span class="step-badge">WAITING</span></div>
+            <div class="live-step-item pending"><span style="display:flex;align-items:center;gap:6px;"><span>🛬</span><span>5. Autonomous Land</span></span><span class="step-badge">WAITING</span></div>
+            <div class="live-step-item pending"><span style="display:flex;align-items:center;gap:6px;"><span>🛑</span><span>6. Disarm Platform</span></span><span class="step-badge">WAITING</span></div>
+          </div>
+
+          <button class="primary as2-action-btn" style="margin-top:8px;font-weight:700;" onclick="switchView('tree')">
+            🌳 Inspect in 3D Behavior Tree Studio
+          </button>
+        </section>
+      </aside>
+
+      <!-- MAP CENTER -->
+      <main class="content-area">
+        <div class="hud-overlay">
+          <div class="hud-card"><small>Alt AGL</small><span id="hud-alt">0.0m</span></div>
+          <div class="hud-card"><small>Mode</small><span id="hud-mode" style="color:var(--cyan)">OFFBOARD</span></div>
+          <div class="hud-card"><small>AERIXIS Link</small><span id="hud-link" style="color:var(--green)">ONLINE</span></div>
+        </div>
+        <div id="map"></div>
+
+        <!-- BOTTOM CONSOLE -->
+        <div class="console-tray">
+          <div class="console-header">
+            <span>MAVLINK & AERIXIS SYSTEM LOGS</span>
+            <div style="display:flex;gap:10px;align-items:center;">
+              <span id="log-count">0 messages</span>
+              <a href="javascript:void(0)" onclick="switchView('logs')" style="color:var(--cyan);text-decoration:none;font-weight:600;">Open Full BT Log Viewer →</a>
+            </div>
+          </div>
+          <ul class="console-list" id="console-list"></ul>
+        </div>
+      </main>
+    </div>
+
+    <!-- VIEW 2: 3D BEHAVIOR TREE STUDIO (THREE.JS) -->
+    <div id="view-tree" class="tab-view">
+      <div class="tree-canvas-container">
+        <div class="tree-toolbar">
+          <label style="font-size:11px;color:var(--muted);font-weight:700;">MISSION SEQUENCE:</label>
+          <select id="preset-selector" onchange="loadBtPreset(this.value)">
+            <option value="survey">Square Area Survey (Default)</option>
+            <option value="inspection">Point-to-Point Inspection</option>
+            <option value="patrol">Corridor Patrol</option>
+            <option value="custom">Custom Clean Mission</option>
+          </select>
+          <button onclick="reset3DCamera()" title="Reset 3D Camera">🎥 Reset Camera</button>
+          <button onclick="setTopDownView()" title="Top-Down 2D Projection">📐 Top-Down</button>
+          <button onclick="setIsoView()" title="Isometric 3D Projection">🎲 3D Isometric</button>
+          <button class="primary as2-action-btn" onclick="executeCurrentMission()">▶ Execute Mission via Radio</button>
+        </div>
+
+        <canvas id="threejs-canvas"></canvas>
+
+        <div class="tree-legend">
+          <div class="legend-item"><span class="legend-dot" style="background:#10b981;"></span> 🔒 Mandatory AERIXIS Offboard Nodes</div>
+          <div class="legend-item"><span class="legend-dot" style="background:#38bdf8;"></span> Control Sequence / Fallback</div>
+          <div class="legend-item"><span class="legend-dot" style="background:#3b82f6;"></span> User Action Nodes (GoTo, Wait, Land)</div>
+          <div class="legend-item"><span class="legend-dot" style="background:#a855f7;"></span> Conditions & Decorators</div>
+        </div>
+      </div>
+
+      <aside class="tree-sidebar">
+        <div class="card-head">
+          <div>
+            <h2 style="font-size:13px;color:var(--text);font-weight:800;">Tree Hierarchy</h2>
+            <small style="color:var(--muted);font-size:11px;">MainTree · Sequence</small>
+          </div>
+          <button class="primary" style="font-size:11px;padding:4px 8px;" onclick="openAddBtNodeMenu()">+ Add Child Node</button>
+        </div>
+
+        <div style="background:rgba(16, 185, 129, 0.08);border:1px solid rgba(16, 185, 129, 0.3);border-radius:8px;padding:9px 12px;font-size:11px;color:#a7f3d0;line-height:1.4;">
+          <b>🔒 Mandatory AERIXIS Prerequisites (Permanent):</b><br>
+          Nodes 1, 2, and 3 (<b>Offboard</b>, <b>Arm</b>, <b>Takeoff</b>) are locked system prerequisites. AERIXIS cannot execute any autonomous mission unless these are active.
+        </div>
+
+        <div class="node-sequence-list" id="node-sequence-list"></div>
+
+        <div class="card" style="margin-top:auto;">
+          <div class="card-head">
+            <h2>Real-Time BT XML</h2>
+            <div style="display:flex;gap:4px;">
+              <button style="font-size:10.5px;padding:3px 7px;" onclick="copyBtXml()">Copy</button>
+              <button style="font-size:10.5px;padding:3px 7px;" onclick="downloadBtXml()">Save .xml</button>
+            </div>
+          </div>
+          <textarea id="mini-xml-preview" readonly style="width:100%;height:120px;background:#070b12;border:1px solid var(--line);border-radius:6px;color:#93c5fd;font-family:'JetBrains Mono',monospace;font-size:10.5px;padding:6px;resize:none;outline:none;"></textarea>
+          <button class="primary as2-action-btn" style="width:100%;margin-top:6px;font-weight:700;" onclick="executeCurrentMission()">
+            ▶ Transmit & Run BT via Radio Telemetry
+          </button>
+        </div>
+      </aside>
+    </div>
+
+    <!-- VIEW 3: DEDICATED BT LOGS TABLE VIEWER -->
+    <div id="view-logs" class="tab-view">
+      <div class="log-view-header">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <b style="font-size:13.5px;color:var(--text);">Behavior Tree Live Execution Tracer</b>
+          <span class="card-badge" id="bt-log-total-count" style="color:var(--cyan);background:rgba(56,189,248,0.1);">0 events</span>
+        </div>
+
+        <div class="log-filter-group">
+          <button id="bt-filter-btn-all" class="log-filter-btn active" onclick="setBtLogFilter('ALL')">ALL</button>
+          <button id="bt-filter-btn-ticks" class="log-filter-btn" onclick="setBtLogFilter('TICKS')">BT TICKS</button>
+          <button id="bt-filter-btn-actions" class="log-filter-btn" onclick="setBtLogFilter('ACTIONS')">ACTIONS</button>
+          <button id="bt-filter-btn-errors" class="log-filter-btn" onclick="setBtLogFilter('ERRORS')">ERRORS</button>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:8px;">
+          <input type="text" class="log-search-input" placeholder="🔍 Search logs..." oninput="filterBtLogsSearch(this.value)">
+          <button id="bt-autoscroll-toggle" class="log-filter-btn active" onclick="toggleBtAutoScroll()">⬇️ Auto-Scroll: ON</button>
+          <button class="log-filter-btn" onclick="clearBtLogs()">Clear</button>
+          <button class="log-filter-btn" onclick="exportBtLogs()">Export .log</button>
+        </div>
+      </div>
+
+      <div class="log-table-container" id="bt-log-scroll-container">
+        <table class="bt-log-table">
+          <thead>
+            <tr>
+              <th style="width:100px;">Time</th>
+              <th style="width:90px;">Severity</th>
+              <th style="width:140px;">BT Tag</th>
+              <th>Message Detail</th>
+            </tr>
+          </thead>
+          <tbody id="bt-log-table-body">
+            <!-- Populated dynamically -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- VIEW 4: MISSION XML & RADIO TELEMETRY DETAILS -->
+    <div id="view-xml" class="tab-view">
+      <div class="xml-main-editor">
+        <div class="xml-toolbar">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-weight:700;color:var(--text);font-size:13px;">BehaviorTree.CPP v4 Generated Schema</span>
+            <span class="card-badge" style="color:var(--cyan);background:rgba(56,189,248,0.1)">Live Synchronized</span>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button onclick="copyBtXml()">📋 Copy XML</button>
+            <button onclick="downloadBtXml()">💾 Download XML</button>
+            <button class="primary as2-action-btn" onclick="executeCurrentMission()">▶ Transmit over MAVLink Radio</button>
+          </div>
+        </div>
+        <textarea id="full-xml-editor" class="xml-textarea" spellcheck="false"></textarea>
+      </div>
+
+      <aside class="xml-info-pane">
+        <h2 style="font-size:13px;font-weight:800;color:var(--text);">How the Behavior Tree is Sent over Radio Telemetry</h2>
+        <p style="font-size:11.5px;color:var(--muted);line-height:1.5;">
+          Standard radio modems (SiK, Holybro, RFD900) operate over low-bandwidth serial lines (57,600 baud). High-volume ROS 2 traffic cannot travel directly through the air.
+        </p>
+        <div class="pipeline-step">
+          <div class="step-num">1</div>
+          <div>
+            <b style="color:var(--cyan);font-size:11.5px;">Design on GCS Laptop</b>
+            <p style="font-size:11px;color:var(--muted);margin-top:2px;">Plan mission in 3D studio, setting altitudes, coordinates, and speeds.</p>
+          </div>
+        </div>
+        <div class="pipeline-step">
+          <div class="step-num">2</div>
+          <div>
+            <b style="color:var(--cyan);font-size:11.5px;">Upload XML to the onboard executor</b>
+            <p style="font-size:11px;color:var(--muted);margin-top:2px;">The fleet service transfers the XML over an authenticated connection and verifies its checksum onboard.</p>
+          </div>
+        </div>
+        <div class="pipeline-step">
+          <div class="step-num">3</div>
+          <div>
+            <b style="color:var(--cyan);font-size:11.5px;">Onboard Assembly on RPi 5</b>
+            <p style="font-size:11px;color:var(--muted);margin-top:2px;">The onboard mission manager stores and validates the exact XML revision. Uploading does not start flight.</p>
+          </div>
+        </div>
+        <div class="pipeline-step">
+          <div class="step-num">4</div>
+          <div>
+            <b style="color:var(--green);font-size:11.5px;">AERIXIS Engine Executes</b>
+            <p style="font-size:11px;color:var(--muted);margin-top:2px;">An explicit start request runs the validated tree onboard. Actual node states and errors return to the GCS.</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+  </div>
+
+  <!-- ROS 2 STACK & CONTROLLER MONITOR MODAL (MATCHING REFERENCE UI) -->
+  <div class="ros-modal-overlay" id="ros-inspector-modal">
+    <div class="ros-modal-window">
+      <div class="ros-modal-header">
+        <div class="ros-modal-title">
+          <span>🔍 ROS 2 Stack & Controller Monitor</span>
+          <span class="ros-conn-tag" id="ros-modal-status-text">ROS: Initializing...</span>
+        </div>
+        <button class="btn-icon" onclick="closeRosInspector()" style="font-size:16px;">✕</button>
+      </div>
+
+      <div class="ros-modal-body">
+        <!-- NODES SECTION -->
+        <div>
+          <div class="ros-section-title">
+            <span>Nodes</span>
+          </div>
+          <div class="ros-pills-grid" id="ros-nodes-grid">
+            <!-- Populated dynamically: green (running), blue (offline), red (error) -->
+          </div>
+        </div>
+
+        <!-- CONTROLLERS SECTION -->
+        <div>
+          <div class="ros-section-title">
+            <span>Controllers</span>
+          </div>
+          <div class="ros-pills-grid" id="ros-controllers-grid">
+            <!-- Populated dynamically: green (running), blue (offline), red (error) -->
+          </div>
+        </div>
+      </div>
+
+      <div class="ros-modal-footer">
+        <div class="ros-legend">
+          <div class="ros-legend-item"><span class="ros-legend-dot" style="background:#22c55e;"></span> Running (Active)</div>
+          <div class="ros-legend-item"><span class="ros-legend-dot" style="background:#3b82f6;"></span> Inactive (Offline)</div>
+          <div class="ros-legend-item"><span class="ros-legend-dot" style="background:#ef4444;"></span> Fault / Alert</div>
+        </div>
+        <span>Auto-refreshing every 1.5s</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONNECTION SETTINGS MODAL -->
+  <div class="modal-overlay" id="conn-modal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3 style="font-size:14px;font-weight:700;">Connect to Drone / Telemetry Radio</h3>
+        <button class="btn-icon" onclick="closeConnModal()" style="font-size:16px;">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex;gap:6px;">
+          <button id="modal-tab-serial" class="primary" style="flex:1;" onclick="setModalTab('serial')">📻 Serial Telemetry Radio</button>
+          <button id="modal-tab-udp" style="flex:1;" onclick="setModalTab('udp')">🌐 UDP / Network Link</button>
+        </div>
+
+        <div id="modal-pane-serial" style="display:flex;flex-direction:column;gap:10px;">
+          <div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+              <label style="font-size:11px;color:var(--muted);font-weight:600;">Laptop Serial / USB Port</label>
+              <a href="javascript:void(0)" onclick="refreshPorts()" style="color:var(--cyan);font-size:11px;text-decoration:none;">🔄 Auto-Detect</a>
+            </div>
+            <select id="serial-port-select" style="width:100%;padding:7px;background:var(--card);border:1px solid var(--line);color:var(--text);border-radius:6px;font-size:12px;">
+              <option value="">Scanning serial ports...</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px;">Telemetry Baud Rate</label>
+            <select id="serial-baud-select" style="width:100%;padding:7px;background:var(--card);border:1px solid var(--line);color:var(--text);border-radius:6px;font-size:12px;">
+              <option value="57600">57,600 baud (Standard SiK / Holybro Radio)</option>
+              <option value="115200">115,200 baud (High-Speed Radio / USB)</option>
+              <option value="921600">921,600 baud (Direct Companion USB / FTDI)</option>
+            </select>
+          </div>
+          <button class="primary" style="margin-top:6px;font-weight:700;" onclick="connectSerial()">
+            📻 Connect via Telemetry Radio
+          </button>
+        </div>
+
+        <div id="modal-pane-udp" style="display:none;flex-direction:column;gap:10px;">
+          <div>
+            <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px;">Gateway Target Host & Port</label>
+            <input type="text" id="udp-host" value="127.0.0.1" style="width:68%;padding:7px;background:var(--card);border:1px solid var(--line);color:var(--text);border-radius:6px;font-size:12px;">
+            <input type="number" id="udp-port" value="14550" style="width:28%;padding:7px;background:var(--card);border:1px solid var(--line);color:var(--text);border-radius:6px;font-size:12px;">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--muted);font-weight:600;display:block;margin-bottom:4px;">GCS Inbound Listen Port</label>
+            <input type="number" id="udp-listen" value="14551" style="width:100%;padding:7px;background:var(--card);border:1px solid var(--line);color:var(--text);border-radius:6px;font-size:12px;">
+          </div>
+          <button class="primary" style="margin-top:6px;font-weight:700;" onclick="connectUdp()">
+            🌐 Connect via UDP
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <dialog id="aircraft-dialog" class="glass-dialog"><form id="aircraft-form"><div class="dialog-head"><div><span class="eyebrow">CONNECT AN ONBOARD EXECUTOR</span><h2>Add aircraft</h2></div><button type="button" class="dialog-close" data-close="aircraft-dialog" aria-label="Close aircraft setup">×</button></div><p class="dialog-description">Use the aircraft’s mission-manager address and pairing token.</p><label>Drone namespace<input name="drone_id" placeholder="drone0" pattern="[A-Za-z_][A-Za-z0-9_]{0,63}" required></label><label>Display name<input name="label" placeholder="Rescue 01" maxlength="60"></label><label>Mission transport<select name="transport" id="aircraft-transport"><option value="https">HTTPS / SSH tunnel</option><option value="mavlink">GCS telemetry radio (MAVLink)</option></select></label><label id="aircraft-endpoint-label">Onboard endpoint<input name="endpoint" type="url" placeholder="https://192.168.1.10:8790" required></label><label id="aircraft-system-label" hidden>MAVLink aircraft system ID<input name="system_id" type="number" min="1" max="254" placeholder="1"></label><label>Pairing token<input name="token" type="password" minlength="32" required autocomplete="off" placeholder="Token from the onboard setup"></label><p class="dialog-hint">For telemetry, configure the laptop radio link and matching onboard gateway system ID first. HTTPS or SSH tunnels are also supported. The pairing token authenticates requests on either transport; it stays in the laptop’s private configuration.</p><div class="dialog-error" id="aircraft-form-error" role="alert"></div><button class="fleet-primary" type="submit">Connect aircraft <span>↗</span></button></form></dialog>
+  <dialog id="fleet-error-dialog" class="glass-dialog error-dialog" aria-labelledby="error-title"><div class="dialog-head"><span class="error-orb">!</span><button class="dialog-close" data-close="fleet-error-dialog" aria-label="Close error">×</button></div><span class="eyebrow">ATTENTION REQUIRED</span><h2 id="error-title">An operation needs attention</h2><p id="error-message"></p><div class="error-context" id="error-context"></div><div class="dialog-actions"><button class="fleet-primary" id="view-error-activity">View activity</button><button data-close="fleet-error-dialog">Dismiss</button></div></dialog>
+  <div id="gcs-toasts" class="toast-stack" aria-live="polite"></div>
+  <!-- JavaScript Libraries & Modular Components -->
+  <script src="/vendor/leaflet.js"></script>
+  <script src="/vendor/three.min.js"></script>
+  <script src="/js/ros_inspector.js"></script>
+  <script src="/js/bt_studio.js"></script>
+  <script src="/js/bt_logger.js"></script>
+  <script src="/js/app.js?v=crystal1"></script>
+  <script src="/js/fleet_3d.js"></script>
+  <script src="/js/fleet.js?v=crystal1"></script>
+  <script src="/js/task-icons.js?v=crystal1"></script>
+  <script src="/js/flow-canvas.js?v=crystal1"></script>
+  <script src="/js/designer.js?v=crystal1"></script>
+  <script src="/js/fleet_planner.js"></script>
+
+  <script defer src="/js/interface.js?v=crystal1"></script>
+  <script src="/js/execution-model.js?v=crystal1"></script>
+  <script defer src="/js/workspace.js?v=crystal1"></script>
+  <script defer src="/js/live-execution.js?v=crystal1"></script>
+  <script defer src="/js/link-transfer.js?v=crystal1"></script>
+  <script src="/js/map-position.js?v=crystal1"></script>
+  <script defer src="/js/fleet-map.js?v=crystal1"></script>
+  <script defer src="/js/spectrum.js?v=crystal1"></script>
+</body>
+</html>

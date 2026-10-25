@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+    <BehaviorTree ID="MainTree">
+        <Sequence name="FlightMissionSequence">
+            <Action ID="Offboard" service_name="set_offboard_mode"/>
+            <Action ID="Arm" service_name="set_arming_state"/>
+            <Action ID="TakeOff" height="2.0" speed="0.5"/>
+            <Action ID="GoTo" max_speed="1.5" pose="5;0;2" yaw_angle="0.0" yaw_mode="1" frame_id="earth"/>
+            <Action ID="GoTo" max_speed="1.5" pose="5;5;2" yaw_angle="0.0" yaw_mode="1" frame_id="earth"/>
+            <Action ID="GoTo" max_speed="1.5" pose="0;5;2" yaw_angle="0.0" yaw_mode="1" frame_id="earth"/>
+            <Action ID="GoTo" max_speed="1.5" pose="0;0;2" yaw_angle="0.0" yaw_mode="1" frame_id="earth"/>
+            <Action ID="Land" speed="0.5"/>
+            <Action ID="Disarm" service_name="set_arming_state"/>
+        </Sequence>
+    </BehaviorTree>
+    <TreeNodesModel>
+        <Action ID="Arm">
+            <input_port name="service_name" default="set_arming_state">Arming service</input_port>
+        </Action>
+        <Action ID="Disarm">
+            <input_port name="service_name" default="set_arming_state">Disarming service</input_port>
+        </Action>
+        <Action ID="Offboard">
+            <input_port name="service_name" default="set_offboard_mode">Offboard mode service</input_port>
+        </Action>
+        <Action ID="TakeOff">
+            <input_port name="height" default="2.0">Takeoff height (m)</input_port>
+            <input_port name="speed" default="0.5">Takeoff speed (m/s)</input_port>
+        </Action>
+        <Action ID="GoTo">
+            <input_port name="pose">Target position x;y;z</input_port>
+            <input_port name="max_speed" default="1.5">Maximum speed (m/s)</input_port>
+            <input_port name="yaw_angle" default="0.0">Yaw angle (rad)</input_port>
+            <input_port name="yaw_mode" default="1">Yaw mode: {KEEP_YAW = 0, PATH_FACING = 1, FIXED_YAW = 2}</input_port>
+            <input_port name="frame_id" default="earth">Reference coordinate frame</input_port>
+        </Action>
+        <Action ID="Land">
+            <input_port name="speed" default="0.5">Landing speed (m/s)</input_port>
+        </Action>
+    </TreeNodesModel>
+</root>

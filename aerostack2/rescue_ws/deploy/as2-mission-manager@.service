@@ -1,0 +1,18 @@
+# Optional user service. Install only after the bench checks in ONBOARD_MISSIONS.md.
+# Place at ~/.config/systemd/user/as2-mission-manager@.service.
+# This default binds loopback and does NOT enable flight. For laptop access use
+# an SSH tunnel, or add a drop-in with a trusted TLS certificate and bind address.
+[Unit]
+Description=AS2 onboard mission manager (%i)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/aerostack2/rescue_ws/scripts/start_mission_manager.sh %i
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=25
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

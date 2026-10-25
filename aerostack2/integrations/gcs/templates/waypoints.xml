@@ -1,0 +1,30 @@
+<root BTCPP_format="4" main_tree_to_execute="Mission">
+  <BehaviorTree ID="Mission">
+    <RecoverThenFail>
+      <Sequence>
+        <Timeout msec="10000">
+          <RetryUntilSuccessful num_attempts="-1">
+            <Delay delay_msec="100">
+              <VehicleHealthy />
+            </Delay>
+          </RetryUntilSuccessful>
+        </Timeout>
+        <SafetyGate flag="VehicleHealthy">
+          <Sequence name="FlightLifecycle">
+            <Offboard service_name="set_offboard_mode" />
+            <Arm service_name="set_arming_state" />
+            <ManagedTakeoff height="5" speed="0.5" />
+            <Sequence name="CheckpointedCoverage">
+              <SurveyWaypoint segment_id="leg_0" pose="0;0;5" speed="0.5" timeout_s="120" swarm_id="shared-mission-group" />
+              <SurveyWaypoint segment_id="leg_1" pose="10;0;5" speed="0.5" timeout_s="120" swarm_id="shared-mission-group" />
+              <SurveyWaypoint segment_id="leg_2" pose="10;10;5" speed="0.5" timeout_s="120" swarm_id="shared-mission-group" />
+            </Sequence>
+            <ManagedLand speed="0.5" />
+            <Disarm service_name="set_arming_state" />
+          </Sequence>
+        </SafetyGate>
+      </Sequence>
+      <RequestRecovery timeout_s="15" />
+    </RecoverThenFail>
+  </BehaviorTree>
+</root>

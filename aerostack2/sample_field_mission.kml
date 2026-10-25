@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>AS2 Playground Survey Mission</name>
+    <description>Sample KML Area Boundary and Waypoints for Aerostack2 Autonomous Flight</description>
+    <Placemark>
+      <name>Survey Geofence Area</name>
+      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>
+              8.545450,47.397650,2.5
+              8.545800,47.397650,2.5
+              8.545800,47.397900,2.5
+              8.545450,47.397900,2.5
+              8.545450,47.397650,2.5
+            </coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+    </Placemark>
+    <Placemark>
+      <name>Waypoint 1 - Alpha</name>
+      <Point>
+        <coordinates>8.545680,47.397742,2.5</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Waypoint 2 - Bravo</name>
+      <Point>
+        <coordinates>8.545680,47.397820,2.5</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Waypoint 3 - Charlie</name>
+      <Point>
+        <coordinates>8.545520,47.397820,2.5</coordinates>
+      </Point>
+    </Placemark>
+    <Placemark>
+      <name>Waypoint 4 - Home Return</name>
+      <Point>
+        <coordinates>8.545594,47.397742,2.5</coordinates>
+      </Point>
+    </Placemark>
+  </Document>
+</kml>

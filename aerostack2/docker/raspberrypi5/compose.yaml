@@ -1,0 +1,56 @@
+# AeroStack2 rescue onboard stack on a Raspberry Pi 5.
+#
+#   cd docker/raspberrypi5 && cp onboard.env.example onboard.env   (edit: drone ID, system ID, radios)
+#   docker compose build                     # once, on the Pi (~40-60 min)
+#   docker compose up -d                     # starts now and after every reboot
+#   docker compose logs -f onboard           # live output of every link
+#   docker compose exec onboard /entrypoint.sh token    # pairing token for the GCS
+#   docker compose exec onboard /entrypoint.sh status   # link states
+#
+# Optional configuration window on the Pi desktop (stop the service first so links don't run twice):
+#   xhost +local: && docker compose stop onboard && docker compose --profile gui run --rm gui
+name: as2-rescue
+
+x-onboard: &onboard
+  image: as2-rescue-onboard:pi5
+  build:
+    context: ../..
+    dockerfile: docker/raspberrypi5/Dockerfile.onboard
+    args:
+      MAKE_JOBS: "2"
+  # Host networking: DDS discovery between onboard nodes, the A8 camera (192.168.144.x),
+  # IP mesh radios and a UDP GCS link all behave exactly as on a native install.
+  network_mode: host
+  ipc: host
+  # Lets the camera tracker raise its detector's scheduling priority (nice -5) over the AS2 Python
+  # nodes sharing its cores (2026-10-25). Nothing else: no privileged mode.
+  cap_add: [SYS_NICE]
+  env_file: [onboard.env]
+  volumes:
+    - as2-data:/data          # settings, pairing token, staged missions, payload journal, logs
+    - /dev:/dev               # radios / FC may be plugged in after start
+  # Serial devices only (no privileged mode): ttyAMA (Pi UART), ttyUSB (radios), ttyACM (FC USB).
+  device_cgroup_rules:
+    - "c 204:* rmw"
+    - "c 188:* rmw"
+    - "c 166:* rmw"
+
+services:
+  onboard:
+    <<: *onboard
+    restart: unless-stopped
+    command: ["service"]
+
+  gui:
+    <<: *onboard
+    profiles: ["gui"]
+    command: ["gui"]
+    environment:
+      DISPLAY: ${DISPLAY:-:0}
+    volumes:
+      - as2-data:/data
+      - /dev:/dev
+      - /tmp/.X11-unix:/tmp/.X11-unix
+
+volumes:
+  as2-data:

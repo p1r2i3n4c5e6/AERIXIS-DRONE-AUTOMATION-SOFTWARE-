@@ -1,0 +1,32 @@
+Build: A8-20261020-dualtrack2
+
+Validated locally on 2026-10-20:
+- 12 unittest cases passed for active dual-tracker behavior and NCNN input parity.
+- Existing stop, preview, reconnect and shutdown script assertions passed.
+  The reconnect script exercises legacy classes; active DualTracker is covered
+  by test_dual_reliability.py.
+- Actual OC-SORT confirmation/acquisition exercised.
+- Real NCNN child process returned a person detection, the new timing payload,
+  respected the one-in-flight guard, and exited on stop.
+- Real NanoTrack ONNX files loaded; repeated init on the same instance returned
+  identical next-update boxes/scores to fresh instances for the test image.
+- 40 paired detector trials: input/detection deltas zero on the supplied image;
+  91.36 -> 91.23 ms median, 94.26 -> 96.50 ms p95. No material detector speedup
+  established. See measurements/ and OPTIMIZATION_REPORT.md.
+- 12 warm Nano reseed pairs: median 5.73 -> 1.67 ms.
+- Shipped Python sources compile and CLI prints the build above.
+- Unused downloaded FilterPy source was moved out of the delivery directory;
+  runtime uses the included OC-SORT compatibility helpers.
+
+Included:
+- Official upstream OC-SORT source files with upstream MIT license and pinned source revision.
+- NanoTrack simulated backbone/head ONNX models with model-source license.
+- SIYI center-and-attitude startup helper.
+- Existing YOLO NCNN process/capture/gimbal pipeline integrated with both trackers.
+- Separate preview and movement-enabled launchers for Windows and Raspberry Pi.
+
+Not validated on camera hardware, Raspberry Pi, user Windows environment, or in flight.
+No real-motion sequence or labeled accuracy dataset was available; unchanged
+live FPS, improved real-world retention, and accuracy equivalence are unproven.
+No packet receipt or physical gimbal movement observed in this workspace.
+The user-side RTSP main path was previously confirmed in supplied logs; the sub path returned 404.

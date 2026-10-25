@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AERIXIS Mission Control</title>
+  <meta name="description" content="AERIXIS ground control for flood-rescue drone swarms: connect, check, plan, upload, fly and review.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="/ui/brand/aerixis-icon.svg">
+  <link rel="icon" type="image/png" sizes="512x512" href="/ui/brand/aerixis-icon-512.png">
+  <link rel="apple-touch-icon" href="/ui/brand/aerixis-icon-512.png">
+  <meta name="theme-color" content="#0B2347">
+  <link rel="stylesheet" href="/vendor/leaflet.css">
+  <link rel="stylesheet" href="/ui/css/gcs.css?v=13">
+  <link rel="stylesheet" href="/ui/css/splash.css?v=1">
+  <script>
+    // Apply the saved theme before first paint so the page never flashes.
+    try { const t = JSON.parse(localStorage.getItem('as2gcs.theme')); document.documentElement.dataset.theme = t || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch (e) { }
+  </script>
+</head>
+<body>
+  <!-- Loading splash: first thing on screen, removed by ui/js/splash.js once the app is ready. -->
+  <div class="splash" id="splash" role="status" aria-live="polite" aria-label="AERIXIS is loading">
+    <div class="sp-card">
+      <svg class="sp-logo" xmlns="http://www.w3.org/2000/svg" viewBox="100 140 1640 390" role="img" aria-label="AERIXIS"><title>AERIXIS</title><g class="aerixis-a" fill="currentColor"><path d="M118 515 L325 172 L396 172 L407 153 L474 270 L412 296 L372 226 L178 515 Z"/><path d="M438 390 L505 342 L580 468 L485 468 Z"/></g><path class="aerixis-swoosh" fill="var(--swoosh)" d="M200 515 L298 383 C380 322 480 278 598 253 C470 330 330 430 218 515 Z"/><g class="aerixis-word" fill="currentColor" fill-rule="evenodd"><g transform="translate(-262 0)"><path style="--i:0" d="M886 278 H1060 V310 H926 V355 H1044 V389 H926 V436 H1060 V468 H886 Z"/><path style="--i:1" d="M1107 468 V278 H1235 A61 61 0 0 1 1236 400 L1297 468 H1245 L1185 400 H1147 V468 Z M1147 310 V368 H1233 A29 29 0 0 0 1233 310 Z"/><path style="--i:2" d="M1333 278 H1380 V468 H1333 Z"/><g transform="translate(83 0)"><path style="--i:3" d="M1333 278 H1388 L1449 349 L1510 278 H1565 L1477 381 L1555 468 H1500 L1449 410 L1393 468 H1337 L1421 381 Z"/><path style="--i:4" d="M1620 278 H1667 V468 H1620 Z"/><path style="--i:5" d="M1896 332 C1896 307 1882 295 1855 295 H1781 C1752 295 1739 309 1739 331 C1739 352 1752 362 1780 367 L1856 381 C1884 386 1896 398 1896 419 C1896 441 1882 451 1855 451 H1781 C1752 451 1739 440 1739 415" fill="none" stroke="currentColor" stroke-width="34"/></g></g></g></svg>
+      <p class="sp-kicker">Mission control</p>
+      <div class="sp-status"><b>Starting…</b><span></span></div>
+      <div class="sp-bar"><i></i></div>
+      <ul class="sp-steps">
+        <li data-step="ui"><span>Interface</span><small></small></li>
+        <li data-step="server"><span>Ground station server</span><small></small></li>
+        <li data-step="fleet"><span>Aircraft and radio links</span><small></small></li>
+        <li data-step="missions"><span>Mission catalogue</span><small></small></li>
+        <li data-step="maps"><span>Maps</span><small></small></li>
+      </ul>
+      <div class="sp-error"><b></b><p></p></div>
+      <div class="sp-actions"><button class="sp-btn" data-act="open">Open anyway</button><button class="sp-btn primary" data-act="retry">Retry</button></div>
+      <div class="sp-foot"><button class="sp-skip" data-act="skip" title="Skip the loading screen (Esc)">Open now · Esc</button></div>
+    </div>
+  </div>
+  <script src="/ui/js/splash.js?v=1"></script>
+  <div class="app">
+    <aside class="side">
+      <div class="side-head">
+        <button class="brand" id="brand" title="About AERIXIS">
+          <img class="brand-logo" src="/ui/brand/aerixis-logo-dark.svg" alt="AERIXIS" width="140" height="33">
+        </button>
+        <button class="side-menu-btn" id="side-menu-btn" aria-label="Hide or show the menu"></button>
+      </div>
+      <nav id="steps"></nav>
+      <div id="flight-controls"></div>
+      <div class="side-foot" id="foot"></div>
+    </aside>
+    <div class="side-scrim" id="side-scrim"></div>
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="menu-btn" aria-label="Show or hide the menu"></button>
+        <div class="crumbs"><small id="crumb-step"></small><h1 id="crumb-title"></h1></div>
+        <div class="top-spacer"></div>
+        <span class="pill" id="mode-pill"></span>
+        <span class="pill" id="status-pill"></span>
+        <button class="btn em-btn" id="em-btn" title="Emergency: return to launch or land one or all aircraft"></button>
+        <button class="icon-btn bell" id="bell" aria-label="Notifications"><span class="count" id="bell-count"></span></button>
+        <button class="icon-btn" id="theme" aria-label="Switch theme"></button>
+        <section class="notif-panel" id="notif-panel" hidden>
+          <div class="notif-head"><b>Notifications</b><span class="faint" id="notif-sub"></span><button class="btn sm ghost" id="notif-clear">Clear all</button></div>
+          <div class="notif-set" id="notif-set"></div>
+          <div class="notif-list" id="notif-list"></div>
+        </section>
+      </header>
+      <div class="page-wrap" id="page-wrap"><div id="pages"></div></div>
+    </main>
+  </div>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <script src="/vendor/leaflet.js" onerror="window.AerixisSplash && AerixisSplash.step('maps', 'warn', 'map library missing')"></script>
+  <script type="module" src="/ui/js/main.js?v=15" onerror="window.AerixisSplash && AerixisSplash.fail('The interface could not start', 'ui/js/main.js did not load from the GCS server.')"></script>
+</body>
+</html>

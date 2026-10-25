@@ -1,0 +1,10 @@
+# AERIXIS flood-rescue onboard stack (installed by rescue_ws/scripts/as2_pi.sh install).
+# Start order: FC link (XRCE agent) -> FC guardian (ready in < 1 s) -> AERIXIS onboard links.
+# Each part restarts by itself; restarting or losing AERIXIS never stops the guardian.
+[Unit]
+Description=AERIXIS flood-rescue onboard stack
+Wants=as2-fc-link.service as2-fc-guardian.service as2-onboard.service
+After=network.target
+
+[Install]
+WantedBy=multi-user.target

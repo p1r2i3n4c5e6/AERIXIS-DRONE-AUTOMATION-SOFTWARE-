@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AS2 Companion Launcher
+Comment=Connect GCS telemetry, drone mesh, flight controller and camera
+Exec=bash -lc '"$HOME/aerostack2/rescue_ws/scripts/run_pi_launcher.sh"'
+Terminal=false
+Categories=Utility;
+Icon=network-transmit-receive

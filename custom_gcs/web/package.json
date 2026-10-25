@@ -1,0 +1,11 @@
+{
+  "dependencies": {
+    "esbuild": "^0.28.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "private": true,
+  "scripts": {
+    "build": "esbuild js/interface.jsx --bundle --minify --define:process.env.NODE_ENV=\\\"production\\\" --outfile=js/interface.js"
+  }
+}

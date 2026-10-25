@@ -1,0 +1,2 @@
+# Preserve the explicit boundary between this overlay and the parent workspace.
+!COLCON_IGNORE

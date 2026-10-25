@@ -1,0 +1,53 @@
+[
+  {
+    "file": "src/vendor/ocsort/ocsort.py",
+    "url": "https://raw.githubusercontent.com/noahcao/OC_SORT/8462e7e729a93ccd3bd995c0a79a890336cb3a0b/trackers/ocsort_tracker/ocsort.py",
+    "bytes": 17824,
+    "upstream_sha256": "122cc1c27d3321eac0debdf3ba782b76d189e1ac878256b8291ffeb4314fa979",
+    "package_sha256": "122cc1c27d3321eac0debdf3ba782b76d189e1ac878256b8291ffeb4314fa979"
+  },
+  {
+    "file": "src/vendor/ocsort/association.py",
+    "url": "https://raw.githubusercontent.com/noahcao/OC_SORT/8462e7e729a93ccd3bd995c0a79a890336cb3a0b/trackers/ocsort_tracker/association.py",
+    "bytes": 13384,
+    "upstream_sha256": "c009a78eaa1c35c1d61217506255051ba882a7b99f9505cdec64da474ff0fbd7",
+    "package_sha256": "9d2f3881d7670c92131fb54be30f95041405c9fe81e520713d65ce2566511948",
+    "local_changes": "Replaced SciPy/LAP assignment with a pure NumPy Hungarian solver."
+  },
+  {
+    "file": "src/vendor/ocsort/kalmanfilter.py",
+    "url": "https://raw.githubusercontent.com/noahcao/OC_SORT/8462e7e729a93ccd3bd995c0a79a890336cb3a0b/trackers/ocsort_tracker/kalmanfilter.py",
+    "bytes": 60075,
+    "upstream_sha256": "165a2d5243f2b874e37d3a3ae8112402f5c53ddfb6eb6e2cddda3311c3a2cded",
+    "package_sha256": "7bf9642ac7cd6c1e422be83da291f45fe7123a512d611e52d9a9a9e099c86d66",
+    "local_changes": "Uses local small FilterPy-compatible helpers to avoid a SciPy dependency."
+  },
+  {
+    "file": "src/vendor/ocsort/LICENSE",
+    "url": "https://raw.githubusercontent.com/noahcao/OC_SORT/8462e7e729a93ccd3bd995c0a79a890336cb3a0b/LICENSE",
+    "bytes": 1067,
+    "upstream_sha256": "e9d83751678cbaba6dfba902ea39215c423d93425e58f8450d6001f7261696f9",
+    "package_sha256": "e9d83751678cbaba6dfba902ea39215c423d93425e58f8450d6001f7261696f9"
+  },
+  {
+    "file": "model/nano/nanotrack_backbone_sim.onnx",
+    "url": "https://raw.githubusercontent.com/HonglinChu/SiamTrackers/248663fde6bf7c40190cf10ee396d5662919ecd3/NanoTrack/models/nanotrackv2/nanotrack_backbone_sim.onnx",
+    "bytes": 1056849,
+    "upstream_sha256": "530bdd0cd00f19afab79a863e71ba71e3312395a5dc9151af675082bdaaa2fc4",
+    "package_sha256": "530bdd0cd00f19afab79a863e71ba71e3312395a5dc9151af675082bdaaa2fc4"
+  },
+  {
+    "file": "model/nano/nanotrack_head_sim.onnx",
+    "url": "https://raw.githubusercontent.com/HonglinChu/SiamTrackers/248663fde6bf7c40190cf10ee396d5662919ecd3/NanoTrack/models/nanotrackv2/nanotrack_head_sim.onnx",
+    "bytes": 726198,
+    "upstream_sha256": "0d8c0637be849f092cc7236cae02e55c8b9455ebe37ba50601d6115db4247cd9",
+    "package_sha256": "0d8c0637be849f092cc7236cae02e55c8b9455ebe37ba50601d6115db4247cd9"
+  },
+  {
+    "file": "model/nano/LICENSE",
+    "url": "https://raw.githubusercontent.com/HonglinChu/SiamTrackers/248663fde6bf7c40190cf10ee396d5662919ecd3/NanoTrack/LICENSE",
+    "bytes": 11357,
+    "upstream_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "package_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  }
+]

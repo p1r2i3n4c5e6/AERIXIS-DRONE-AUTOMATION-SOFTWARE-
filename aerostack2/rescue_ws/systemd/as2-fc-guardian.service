@@ -1,0 +1,24 @@
+# FC guardian: emergency RTL/LAND straight to PX4 when AERIXIS stops (and GCS emergency commands).
+# Independent of AERIXIS: own unit, restarted within 1 s, watchdog 3 s, cores 0-1 (vision uses 2-3).
+[Unit]
+Description=AERIXIS rescue: FC guardian (emergency RTL/LAND straight to PX4)
+Wants=as2-fc-link.service
+After=as2-fc-link.service
+PartOf=as2-rescue.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=all
+WatchdogSec=3
+TimeoutStartSec=30
+User=@USER@
+EnvironmentFile=-/etc/default/as2-rescue
+ExecStart=/usr/bin/python3 @RESCUE@/scripts/as2_onboard_service.py exec guardian
+Restart=always
+RestartSec=1
+Nice=-10
+CPUAffinity=0 1
+
+[Install]
+WantedBy=as2-rescue.target

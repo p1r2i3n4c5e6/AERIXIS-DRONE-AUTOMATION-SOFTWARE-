@@ -1,0 +1,17 @@
+# Micro XRCE-DDS agent: the only path between the Pi and PX4 (UART on the Pi, UDP in SITL).
+[Unit]
+Description=AERIXIS rescue: Micro XRCE-DDS agent (PX4 link)
+After=network.target
+PartOf=as2-rescue.target
+StartLimitIntervalSec=0
+
+[Service]
+User=@USER@
+EnvironmentFile=-/etc/default/as2-rescue
+ExecStart=/usr/bin/python3 @RESCUE@/scripts/as2_onboard_service.py exec fc
+Restart=always
+RestartSec=1
+Nice=-5
+
+[Install]
+WantedBy=as2-rescue.target

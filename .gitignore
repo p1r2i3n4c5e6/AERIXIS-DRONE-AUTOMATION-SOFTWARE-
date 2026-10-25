@@ -1,0 +1,25 @@
+# Build outputs and caches
+build/
+install/
+log/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+node_modules/
+*.egg-info/
+
+# Local secrets and settings: never commit
+custom_gcs/config/fleet.json*
+custom_gcs/config/missions/
+**/onboard.env
+*.token
+panel.pin
+
+# Run outputs
+custom_gcs/tmp/
+custom_gcs/output/
+*.ulg
+*.bag
+*.mcap
+*.log
+*.zip

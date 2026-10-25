@@ -11,7 +11,7 @@ Built on AeroStack2 (ROS 2 Humble) and PX4 v1.16 (uXRCE-DDS). Onboard computer: 
 
 | Folder | What it is |
 |---|---|
-| `aerostack2/` | Onboard software: AeroStack2 (modified), the rescue stack in `rescue_ws/` (mission runtime, FC guardian, mission manager, planner, avoidance, A8 tracker + AI, rate gate), the Raspberry Pi 5 Docker image (`docker/raspberrypi5/`), launch scripts and docs (`docs/IMPLEMENTATION_STATUS.md` is the detailed engineering log) |
+| `aerixis_core/` | **AERIXIS core**, the onboard software: AeroStack2 (modified), the rescue stack in `rescue_ws/` (mission runtime, FC guardian, mission manager, planner, avoidance, A8 tracker + AI, rate gate), the Raspberry Pi 5 Docker image (`docker/raspberrypi5/`), launch scripts and docs (`docs/IMPLEMENTATION_STATUS.md` is the detailed engineering log) |
 | `custom_gcs/` | AERIXIS Mission Control: the ground control station (Python server + web UI), works with a telemetry radio (MAVLink) |
 | `sitl/` | PX4 v1.16.1 SITL changes for testing (`px4-v1.16.1-aerixis.patch`, `px4-rc.as2`) and the SITL runner `run_px4_sitl.sh` |
 
@@ -24,8 +24,8 @@ the onboard settings file with the panel PIN (`onboard.env`). Create your own fr
 ```bash
 git clone <this repo> ~/aerixis && cd ~/aerixis && ./setup.sh
 ```
-`setup.sh` links `~/aerostack2` and `~/custom_gcs` to this checkout (the launchers expect those
-places; see *Known limitations*).
+`setup.sh` links `~/aerostack2` to `aerixis_core/` and `~/custom_gcs` to `custom_gcs/` (the launchers
+expect those places; see *Known limitations*). The commands below use those links.
 
 ### 2. Build the Raspberry Pi 5 image on the laptop and deploy it
 One-time: `sudo apt-get install -y docker-buildx qemu-user-static binfmt-support`
@@ -38,7 +38,7 @@ ssh pi@<pi-ip> "cd ~/aerostack2/docker/raspberrypi5 && docker compose up -d --fo
 ```
 The Pi needs `docker/raspberrypi5/` (compose file) and its own `onboard.env`
 (copy `onboard.env.example`, set the drone ID, system ID and panel PIN). See
-`aerostack2/docker/raspberrypi5/README.md` for the first Pi setup (network, camera, FC link).
+`aerixis_core/docker/raspberrypi5/README.md` for the first Pi setup (network, camera, FC link).
 
 ### 3. Field start (real drone, no simulation)
 ```bash
@@ -70,4 +70,4 @@ The Pi needs a stable 5.1 V / 5 A supply: undervoltage throttles the CPU and cau
 ## Known limitations
 - Several laptop launchers and docs use the absolute path `/home/prince/...`; `setup.sh` covers
   the default layout, a portable-paths pass is planned. The onboard Docker image does not depend on it.
-- Field validation is ongoing; see `aerostack2/docs/IMPLEMENTATION_STATUS.md`.
+- Field validation is ongoing; see `aerixis_core/docs/IMPLEMENTATION_STATUS.md`.

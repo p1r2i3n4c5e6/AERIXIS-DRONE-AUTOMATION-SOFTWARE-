@@ -1,0 +1,34 @@
+trajectory_generator:
+  corridor_margin: 2.0  # [m] AABB half-margin per face used to build the safe flight corridor
+  # Optional: tighten the corridor around intermediate waypoints by inserting
+  # anchor points ± waypoint_anchor_radius m along the entry/exit directions
+  # and using waypoint_margin m for the pinch segments. Set both to 0 to
+  # disable and use a uniform corridor_margin everywhere.
+  waypoint_margin: 0.2          # [m] AABB half-margin for pinch segments
+  waypoint_anchor_radius: 0.5   # [m] offset of anchor points along the path
+
+drone_params:
+  mass: 0.61                  # [kg]
+  gravity: 9.8                # [m/s^2]
+  horizontal_drag: 0.70       # [-] c_h in the GCOPTER flatness model
+  vertical_drag: 0.80         # [-] c_v
+  parasitic_drag: 0.01        # [-] c_p
+  speed_smooth_factor: 1.0e-4 # [-] epsilon_v - speed smoothing
+
+drone_limits:
+  max_velocity: 4.0     # [m/s]
+  max_body_rate: 2.1    # [rad/s]
+  max_tilt_angle: 1.05  # [rad]
+  min_thrust: 2.0       # [N]  (collective thrust)
+  max_thrust: 12.0      # [N]
+
+optimization:
+  time_weight: 20.0          # rho - trajectory duration penalty
+  position_weight: 1.0e+4    # chi[0]
+  velocity_weight: 1.0e+4    # chi[1]
+  body_rate_weight: 1.0e+4   # chi[2]
+  tilt_weight: 1.0e+4        # chi[3]
+  thrust_weight: 1.0e+5      # chi[4]
+  smoothing_eps: 1.0e-2      # Inequality constraint smoothing epsilon
+  integral_resolution: 16    # Quadrature resolution per polynomial piece
+  rel_cost_tol: 1.0e-5       # L-BFGS relative cost tolerance

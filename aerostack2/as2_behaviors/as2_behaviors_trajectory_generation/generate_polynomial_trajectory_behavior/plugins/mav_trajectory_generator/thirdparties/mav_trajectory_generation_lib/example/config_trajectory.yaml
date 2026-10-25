@@ -1,0 +1,12 @@
+# Optimiser configuration. Consumed by run_example.cpp / run_example.py.
+
+optimization:
+  derivative_to_optimize: 4     # 0=POS 1=VEL 2=ACC 3=JERK 4=SNAP
+  solver: linear                # linear | nonlinear
+  a_max: 4.0                    # [m/s^2]
+  nl_max_iterations: 2000       # used only if solver == nonlinear
+  nl_f_rel: 0.05
+  nl_x_rel: 0.1
+  nl_time_penalty: 1000.0
+  nl_initial_stepsize_rel: 0.1
+  nl_inequality_constraint_tolerance: 0.2

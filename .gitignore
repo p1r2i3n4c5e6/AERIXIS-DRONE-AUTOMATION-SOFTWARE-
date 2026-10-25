@@ -21,5 +21,5 @@ custom_gcs/output/
 *.ulg
 *.bag
 *.mcap
-*.log
+# training logs (*.log) are kept; ROS run logs live in log/ (ignored above)
 *.zip

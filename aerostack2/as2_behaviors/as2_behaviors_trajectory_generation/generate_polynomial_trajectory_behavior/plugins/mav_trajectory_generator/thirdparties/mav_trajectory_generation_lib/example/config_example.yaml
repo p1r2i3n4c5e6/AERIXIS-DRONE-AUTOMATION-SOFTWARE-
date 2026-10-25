@@ -1,0 +1,9 @@
+sim_config:
+  step_dt: 0.01         # [s] Sampling period (100 Hz)
+  waypoints:            # [m] world frame (ENU). waypoints[0] is the start position.
+    - [ 0.0,  0.0,  0.0]
+    - [ 0.0,  0.0, 10.0]
+    - [10.0,  0.0, 10.0]
+    - [10.0, 10.0, 20.0]
+    - [ 0.0, 10.0, 20.0]
+    - [ 0.0,  0.0, 20.0]

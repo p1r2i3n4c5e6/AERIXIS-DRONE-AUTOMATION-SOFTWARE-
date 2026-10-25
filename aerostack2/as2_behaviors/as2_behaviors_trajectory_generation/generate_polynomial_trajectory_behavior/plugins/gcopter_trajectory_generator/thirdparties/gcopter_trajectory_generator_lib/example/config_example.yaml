@@ -1,0 +1,10 @@
+sim_config:
+  step_dt: 0.01         # [s] Sampling period for evaluating the generated trajectory
+  # Trajectory generator parameters are configured in config_trajectory.yaml.
+  waypoints:            # [m] world frame (ENU: x east, y north, z up)
+    - [ 0.0,  0.0,  0.0]
+    - [ 0.0,  0.0, 10.0]
+    - [10.0,  0.0, 10.0]
+    - [10.0, 10.0, 20.0]
+    - [ 0.0, 10.0, 20.0]
+    - [ 0.0,  0.0, 20.0]

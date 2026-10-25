@@ -1,0 +1,11 @@
+build/
+build_*/
+install/
+logs/
+__pycache__/
+.pytest_cache/
+*.so
+*.o
+*.a
+*.csv
+.vscode/

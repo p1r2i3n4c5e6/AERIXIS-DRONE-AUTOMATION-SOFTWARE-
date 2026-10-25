@@ -1,0 +1,14 @@
+trajectory_parameters:
+  max_speed:           2.0   # [m/s]   Strict bound on 3D speed norm
+  max_acceleration:    1.0   # [m/s^2] Strict bound on 3D acceleration norm
+  max_jerk:            5.0   # [m/s^3] Per-axis jerk bound
+  max_tracking_error:  0.5   # [m]     Time-stretch gate. <= 0 disables.
+  acceptance_radius:   1.0   # [m]     Multi-waypoint corner radius. 0 disables corner-cut.
+  trajectory_gain:     1.0   # [-]     Scale on max_acceleration in corner-speed cap.
+
+# Implementation knobs of the internal simulator used by the one-shot
+# TrajectoryGenerator wrapper. All keys optional; defaults shown below.
+simulator:
+  max_simulation_time: 60.0    # [s]   Hard horizon for `generate()` to settle.
+  settle_velocity:     0.05    # [m/s] Velocity threshold to stop simulating.
+  polynomial_order:    16      # [-]   Coefficients per axis per spline segment.

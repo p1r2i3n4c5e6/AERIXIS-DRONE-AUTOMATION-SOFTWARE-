@@ -1,0 +1,3 @@
+[submodule "GCOPTER"]
+	path = GCOPTER
+	url = https://github.com/ZJU-FAST-Lab/GCOPTER.git

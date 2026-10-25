@@ -1,0 +1,7 @@
+build/
+install/
+log/
+logs/
+trajectory_logs/
+*.csv
+__pycache__/

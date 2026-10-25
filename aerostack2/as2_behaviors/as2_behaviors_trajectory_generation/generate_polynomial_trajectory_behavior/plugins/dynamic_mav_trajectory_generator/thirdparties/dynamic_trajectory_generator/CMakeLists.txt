@@ -1,0 +1,74 @@
+cmake_minimum_required(VERSION 3.5)
+set(PROJECT_NAME dynamic_trajectory_generator)
+project(${PROJECT_NAME})
+
+# Default to C++17
+set(CMAKE_CXX_STANDARD 17)
+add_compile_options(-fPIC)
+
+find_package(Eigen3 REQUIRED)
+
+add_subdirectory(subpackages/mav_trajectory_generation)
+
+# CPP matplotlib workaround
+# set (CMAKE_CXX_FLAGS " -I/usr/include/python3.8 -lpython3.8")
+# add_subdirectory(subpackages/matplotlib_cpp)
+# include_directories(subpackages/matplotlib_cpp)
+# include(cmake_extern_dependencies/matplotlib_cpp_dependencies.cmake)
+
+# uncomment the following section in order to fill in
+# further dependencies manually.
+# find_package(<dependency> REQUIRED)
+set(SOURCE_CPP_FILES
+  src/dynamic_trajectory.cpp
+  src/dynamic_waypoint.cpp
+  src/utils/logging_utils.cpp
+)
+
+# Logging toggle: define __SCREEN_OUTPUT__ at compile time. When OFF, the
+# DYNAMIC_LOG(...) macro expands to a no-op and no message is emitted. The user
+# can override the default with: cmake -DDYNAMIC_TRAJECTORY_GENERATOR_ENABLE_LOGGING=OFF
+option(DYNAMIC_TRAJECTORY_GENERATOR_ENABLE_LOGGING
+  "Enable on-screen logging from DYNAMIC_LOG (defines __SCREEN_OUTPUT__)" ON)
+
+include_directories(
+  include
+  include/${PROJECT_NAME}
+  ${EIGEN3_INCLUDE_DIRS}
+  # ${MATPLOTLIB_CPP_INCLUDE_DIRS}
+)
+
+# add_executable(${PROJECT_NAME}_node src/main_trajectory_publisher.cpp ${SOURCE_CPP_FILES} ${HEADER_HPP_FILES})
+# target_link_libraries(${PROJECT_NAME}_node nlopt glog::glog
+
+#create library and export it
+add_library(${PROJECT_NAME} ${SOURCE_CPP_FILES})
+target_link_libraries(${PROJECT_NAME} mav_trajectory_generation nlopt )
+target_include_directories(${PROJECT_NAME} PUBLIC include include/${PROJECT_NAME} ${EIGEN3_INCLUDE_DIRS} )
+if(DYNAMIC_TRAJECTORY_GENERATOR_ENABLE_LOGGING)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC __SCREEN_OUTPUT__)
+endif()
+
+#check if tests are enabled
+if (${PROJECT_NAME}_PROFILING_ENABLED)
+# CPP matplotlib workaround
+  message(STATUS "Compilation tests enabled")
+  set (CMAKE_CXX_FLAGS " -I/usr/include/python3.8 -lpython3.8")
+  add_subdirectory(subpackages/matplotlib_cpp)
+  include_directories(subpackages/matplotlib_cpp)
+  include_directories(matplotlib_cpp_INCLUDE_DIRS)
+  add_executable(compilation_tests tests/compilation_tests.cpp )
+  target_link_libraries(compilation_tests ${PROJECT_NAME} mav_trajectory_generation python3.8)
+  # set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} "-fPIC")
+  # include(tests/profiling_cmake.cmake)
+endif()
+
+# Check if tests are enabled
+if (${PROJECT_NAME}_TESTS_ENABLED)
+  add_subdirectory(tests)
+endif()
+
+option(BUILD_PYBIND "Build Python bindings (pybind11 module)" OFF)
+if(BUILD_PYBIND)
+  add_subdirectory(pybind)
+endif()

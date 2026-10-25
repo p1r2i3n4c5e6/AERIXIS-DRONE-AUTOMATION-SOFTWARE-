@@ -1,0 +1,35 @@
+[build-system]
+requires = ["scikit-build-core>=0.8", "pybind11>=2.11"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "trajectory_generator_jerk_limited"
+version = "0.1.0"
+description = "Jerk-limited 3D trajectory generator from a single waypoint (C++ library with Python bindings)."
+authors = [{ name = "Rafael Perez-Segui", email = "r.psegui@upm.es" }]
+license = { text = "BSD-3-Clause" }
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.22",
+]
+
+[project.optional-dependencies]
+examples = ["matplotlib>=3.5"]
+test     = ["pytest>=7"]
+
+[tool.scikit-build]
+cmake.minimum-version = "3.16"
+cmake.build-type      = "Release"
+build-dir             = "build/{wheel_tag}"
+wheel.packages        = ["python/trajectory_generator_jerk_limited"]
+sdist.include = [
+    "CMakeLists.txt",
+    "src/**",
+    "python/**",
+]
+
+[tool.pytest.ini_options]
+testpaths       = ["tests"]
+python_files    = "test_*.py"
+python_classes  = "Test*"
+python_functions = "test_*"

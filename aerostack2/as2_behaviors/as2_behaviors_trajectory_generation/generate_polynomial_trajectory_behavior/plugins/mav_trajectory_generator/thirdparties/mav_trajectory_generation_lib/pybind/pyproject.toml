@@ -1,0 +1,33 @@
+[build-system]
+requires = ["scikit-build-core[pyproject]"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "mav_trajectory_generation_py"
+version = "0.1.0"
+description = "Python bindings for mav_trajectory_generation_lib (ETH-ASL polynomial trajectory optimiser, de-ROSed)"
+license = { text = "BSD-3-Clause" }
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.22",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.scikit-build]
+cmake.minimum-version = "3.16"
+cmake.build-type = "Release"
+build-dir = "build"
+wheel.packages = []
+sdist.include = ["include/**", "src/**", "python/**", "CMakeLists.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+# Disable the globally-installed typeguard pytest plugin: it conflicts with
+# pybind11 type registration and segfaults inside this module's tests.
+addopts = "-p no:typeguard"

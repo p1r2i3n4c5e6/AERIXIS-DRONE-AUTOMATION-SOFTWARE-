@@ -18,6 +18,7 @@ the centre is selected. Before, a selection could stay held forever with the gim
 """
 import logging
 import math
+import os
 import time
 from pathlib import Path
 import cv2
@@ -37,6 +38,21 @@ def iou(a, b):
 
 
 def nano_factory(model_dir):
+    """NanoTrack engine. Default: OpenCV's TrackerNano. A8_NANO_BACKEND=ncnn: the ncnn port
+    (nano_ncnn.py, same boxes and scores, ~25 vs ~40 ms per update on the Pi 5) - not the default
+    because the ncnn Python binding keeps the GIL during inference: in the tracker process the 50 Hz
+    gimbal loop fell from 45 to 33 Hz for a gain of only ~0.5 fps on the saturated Pi (2026-10-26).
+    Use it from its own process, or once the binding releases the GIL."""
+    backend=os.environ.get('A8_NANO_BACKEND','opencv').lower()
+    if backend=='ncnn':
+        import nano_ncnn
+        if not nano_ncnn.available(model_dir):
+            raise RuntimeError('A8_NANO_BACKEND=ncnn but ncnn or the NanoTrack .ncnn files are missing')
+        return nano_ncnn.NanoTrackNcnn(model_dir,threads=1)
+    return opencv_nano(model_dir)
+
+
+def opencv_nano(model_dir):
     if not (hasattr(cv2, 'TrackerNano_create') or
             (hasattr(cv2, 'TrackerNano') and hasattr(cv2.TrackerNano, 'create'))):
         raise RuntimeError('OpenCV TrackerNano is missing; install requirements-dual.txt in a virtual environment')
@@ -63,7 +79,7 @@ class DualTracker:
                  detector_grace=2., reconnect_window=5., factory=None,
                  clock=time.monotonic, names=None, lock_classes=None, nano_hold_s=4.,
                  hold_score=.6, release_after_s=5., edge_release_s=1., edge_margin=.04,
-                 min_visible=.4, ambiguity_ratio=.5, doubt_release_s=1.5):
+                 min_visible=.4, ambiguity_ratio=.5, doubt_release_s=1.5, camera_motion=True):
         self.names=dict(names or {0:'person'})
         self.lock_classes=None if lock_classes is None else {int(c) for c in lock_classes}
         self.model_dir=model_dir;self.factory=factory or (lambda:nano_factory(model_dir))
@@ -74,8 +90,10 @@ class DualTracker:
         self.release_after_s=release_after_s;self.edge_release_s=edge_release_s
         self.edge_margin=edge_margin;self.min_visible=min_visible;self.ambiguity_ratio=ambiguity_ratio
         self.doubt_release_s=doubt_release_s
+        self.camera_motion=camera_motion   # compensate gimbal turns before OC-SORT matching
         self.clock=clock
         self.log=logging.getLogger('dual_tracking');self.reset()
+        self.log.info('NanoTrack engine: %s',type(self.nano).__name__)
 
     @staticmethod
     def _make_oc():
@@ -97,6 +115,7 @@ class DualTracker:
         self.rows=[];self.recovery_id=None;self.recovery_hits=0
         self.last_processed_result=-1;self.visual_records=[];self.box_by_frame={}
         self.left_frame_t=None;self.releases=0;self.block_since=None;self.miss_with_others_t=float('-inf')
+        self.cmc_prev=None;self.last_shift=(0.,0.)
 
     def _new_oc(self):
         self.ocs={}
@@ -207,6 +226,49 @@ class DualTracker:
             self.nano_ready=self.nano_initialized=False
         return self.nano_ready
 
+    CMC_SIZE=(160,90)     # camera-motion estimate on a small grey copy (~1 ms on a Pi 5)
+
+    def _camera_shift(self,frame):
+        """Whole-image shift (px, full frame) since the previous detector frame. A gimbal turn moves
+        every box sideways at once; OC-SORT predicts as if the camera were still, so small boxes
+        lost their match and the target got a new ID (Fast gimbal profile, Pi 5, 2026-10-26)."""
+        try:
+            grey=frame if frame.ndim==2 else cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
+            small=cv2.resize(grey,self.CMC_SIZE,interpolation=cv2.INTER_AREA).astype(np.float32)
+        except cv2.error:
+            return 0.,0.
+        prev,self.cmc_prev=self.cmc_prev,small
+        if prev is None:return 0.,0.
+        window=getattr(self,'cmc_window',None)
+        if window is None:window=self.cmc_window=cv2.createHanningWindow(self.CMC_SIZE,cv2.CV_32F)
+        (dx,dy),response=cv2.phaseCorrelate(prev,small,window)
+        if response<.05 or not (math.isfinite(dx) and math.isfinite(dy)):return 0.,0.   # flat / unsure
+        return dx*frame.shape[1]/self.CMC_SIZE[0],dy*frame.shape[0]/self.CMC_SIZE[1]
+
+    def _shift_tracks(self,dx,dy):
+        """Move every OC-SORT track (state, observations, frozen copy) by the camera shift, each
+        array once (observations and history share arrays)."""
+        if abs(dx)<1. and abs(dy)<1.:return
+        seen=set()
+        def corners(box):
+            if box is None or id(box) in seen or np.asarray(box).sum()<0:return   # -1 placeholder
+            seen.add(id(box));box[0]+=dx;box[2]+=dx;box[1]+=dy;box[3]+=dy
+        def centre(z):
+            if z is None or id(z) in seen:return
+            seen.add(id(z));z[0]+=dx;z[1]+=dy
+        for oc in self.ocs.values():
+            for trk in oc.trackers:
+                kf=trk.kf
+                for z in (kf.x,getattr(kf,'x_prior',None),getattr(kf,'x_post',None)):centre(z)
+                for z in getattr(kf,'history_obs',[]):centre(z)
+                saved=getattr(kf,'attr_saved',None)
+                if saved:
+                    for key in ('x','x_prior','x_post'):centre(saved.get(key))
+                    for z in saved.get('history_obs',[]):centre(z)
+                corners(trk.last_observation)
+                for box in trk.observations.values():corners(box)
+                for box in trk.history_observations:corners(box)
+
     def _observe(self,dets,labels,frame_t,shape):
         """OC-SORT per class; confirmed rows matched back to their detection box."""
         labels=[0]*len(dets) if labels is None else [int(c) for c in labels]
@@ -233,6 +295,9 @@ class DualTracker:
         if math.isfinite(self.last_result_t) and frame_t-self.last_result_t>2.:self._new_oc()
         self.last_processed_result=frame_id;self.last_result_t=frame_t
         h,w=source_frame.shape[:2]
+        if self.camera_motion:
+            self.last_shift=self._camera_shift(source_frame)
+            self._shift_tracks(*self.last_shift)
         observed=self._observe(list(dets),labels,frame_t,(h,w))
         self.rows=observed
         if self.selected_id is None:

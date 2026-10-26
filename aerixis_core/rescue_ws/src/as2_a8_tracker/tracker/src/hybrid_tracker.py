@@ -207,6 +207,10 @@ class UnifiedGimbalController:
       3. 'mavlink_rate' : Pure MAVLink Gimbal Manager v2 (MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW)
       4. 'mavlink_mount': Classic MAVLink Mount Control with FOV angle targeting
     """
+    lead_s = 0.0          # look-ahead defaults (also for controllers built without __init__)
+    _vel_prev = None
+    est_vx = est_vy = 0.0
+
     def __init__(
         self,
         mode: str = "siyi_udp",
@@ -228,6 +232,7 @@ class UnifiedGimbalController:
         scan_mode: str = "sweep",
         siyi_command_cap: int = 35,
         defer_start: bool = False,
+        lead_s: float = 0.0,
     ):
         if scan_on_start:
             raise ValueError("This tracking-only build does not scan without a target")
@@ -267,6 +272,11 @@ class UnifiedGimbalController:
         self.running = True
         self.observation_timeout = OBSERVATION_TIMEOUT_S
         self.siyi_command_cap = max(1, min(100, int(siyi_command_cap)))
+        # Look-ahead (s): aim where the target will be, from its speed measured in the image.
+        # 0 = off (the tracker's own velocity, zero for dualtrack2, so no prediction: old behaviour).
+        self.lead_s = max(0.0, min(0.5, float(lead_s)))
+        self._vel_prev = None          # (target id, cx, cy, observed_t) of the last observation
+        self.est_vx = self.est_vy = 0.0
         self.preview_only = os.environ.get("A8_PREVIEW_ONLY", "1") != "0"
         self.thermal_fault = False
         self._next_temp_check = 0.0
@@ -394,6 +404,9 @@ class UnifiedGimbalController:
                 cx = (x1 + x2) / 2.0
                 cy = (y1 + y2) / 2.0
                 vel = locked_track.get("velocity", (0.0, 0.0))
+                if self.lead_s > 0.0:
+                    vel = self._estimate_velocity(locked_track.get("id"), cx, cy,
+                                                  float(locked_track.get("observed_t", 0.0)))
                 self.last_target = {
                     "cx": cx,
                     "cy": cy,
@@ -406,6 +419,28 @@ class UnifiedGimbalController:
                 }
             else:
                 self.last_target = None
+                self._vel_prev = None
+                self.est_vx = self.est_vy = 0.0
+
+    def _estimate_velocity(self, ident, cx, cy, observed_t):
+        """Target speed in the image (px/s) from successive observations of the same target.
+        Smoothed; restarts on a new target or after a gap, so a jump never becomes a speed."""
+        prev = self._vel_prev
+        if prev is None or prev[0] != ident:
+            self.est_vx = self.est_vy = 0.0
+            self._vel_prev = (ident, cx, cy, observed_t)
+            return 0.0, 0.0
+        dt = observed_t - prev[3]
+        if dt <= 0.0:                      # same observation handed over again
+            return self.est_vx, self.est_vy
+        if dt > 0.3:
+            self.est_vx = self.est_vy = 0.0
+        else:
+            alpha = 0.5
+            self.est_vx = alpha * (cx - prev[1]) / dt + (1.0 - alpha) * self.est_vx
+            self.est_vy = alpha * (cy - prev[2]) / dt + (1.0 - alpha) * self.est_vy
+        self._vel_prev = (ident, cx, cy, observed_t)
+        return self.est_vx, self.est_vy
 
     def _control_loop(self):
         """Dedicated high-frequency 50 Hz PD Servoing Thread with velocity forward-prediction."""
@@ -453,8 +488,9 @@ class UnifiedGimbalController:
 
             if target is not None:
                 time_since = now - target["t"]
-                cx = target["cx"] + target["vx"] * min(0.25, time_since)
-                cy = target["cy"] + target["vy"] * min(0.25, time_since)
+                horizon = min(0.25 + self.lead_s, max(0.0, time_since) + self.lead_s)
+                cx = target["cx"] + target["vx"] * horizon
+                cy = target["cy"] + target["vy"] * horizon
                 frame_w, frame_h = target["w"], target["h"]
 
                 err_x = (cx - (frame_w / 2.0)) / (frame_w / 2.0)
@@ -1800,6 +1836,7 @@ def run(
     gimbal_kd_pitch: float = 0.0,
     gimbal_max_rate: float = 30.0,
     siyi_command_cap: int = 35,
+    gimbal_lead_s: float = 0.0,
     gimbal_invert_yaw: bool = False,
     gimbal_invert_pitch: bool = True,
     scan_on_start: bool = False,
@@ -1871,6 +1908,7 @@ def run(
         kd_pitch     = gimbal_kd_pitch,
         max_rate     = gimbal_max_rate,
         siyi_command_cap = siyi_command_cap,
+        lead_s       = gimbal_lead_s,
         defer_start = True,
         invert_yaw   = gimbal_invert_yaw,
         invert_pitch = gimbal_invert_pitch,
@@ -2274,6 +2312,9 @@ def main():
     p.add_argument("--max-rate", type=float, default=30.0, help="Internal controller normalization; not measured physical degrees/s")
     p.add_argument("--siyi-command-cap", type=int, default=35,
                    help="Maximum SIYI SDK speed magnitude (1..100), not physical deg/s; default 35")
+    p.add_argument("--lead-s", type=float, default=0.0,
+                   help="Gimbal look-ahead in seconds (0..0.5): aim where the target will be, from its "
+                        "measured image speed. 0 = off (default)")
     p.add_argument("--scan-on-start", action=argparse.BooleanOptionalAction, default=False,
                    help="Deprecated; automatic scanning is disabled")
     p.add_argument("--scan-speed", type=float, default=18.0,
@@ -2369,6 +2410,7 @@ def main():
             gimbal_kd_pitch = args.kd_pitch,
             gimbal_max_rate = args.max_rate,
             siyi_command_cap = args.siyi_command_cap,
+            gimbal_lead_s   = args.lead_s,
             gimbal_invert_yaw = args.invert_yaw,
             gimbal_invert_pitch = args.invert_pitch,
             scan_on_start   = args.scan_on_start,

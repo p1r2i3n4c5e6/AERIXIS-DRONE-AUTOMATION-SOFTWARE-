@@ -15,6 +15,26 @@ import sys
 from ament_index_python.packages import get_package_share_directory
 
 
+# Gimbal response profiles (onboard panel: Camera & AI -> Gimbal speed). "normal" is the tracker's
+# original tuning; "fast"/"max" raise the SIYI speed cap and the gains and aim ahead of a moving target.
+# SIYI units are not deg/s: bench-check each profile with props off before flight.
+GIMBAL_PROFILES = {
+    'normal': dict(cap=35, kp_yaw=20.0, kp_pitch=16.0, lead_s=0.0),
+    'fast': dict(cap=70, kp_yaw=30.0, kp_pitch=24.0, lead_s=0.15),
+    'max': dict(cap=100, kp_yaw=40.0, kp_pitch=32.0, lead_s=0.2),
+}
+
+
+def gimbal_arguments(profile, command_cap=None):
+    """hybrid_tracker.py arguments for a gimbal profile; an explicit --command-cap still wins."""
+    if profile not in GIMBAL_PROFILES:
+        raise ValueError('gimbal speed must be one of: ' + ', '.join(GIMBAL_PROFILES))
+    chosen = GIMBAL_PROFILES[profile]
+    cap = chosen['cap'] if command_cap is None else command_cap
+    return ['--siyi-command-cap', str(cap), '--kp-yaw', str(chosen['kp_yaw']),
+            '--kp-pitch', str(chosen['kp_pitch']), '--lead-s', str(chosen['lead_s'])]
+
+
 def tracker_home():
     return Path(get_package_share_directory('as2_a8_tracker')) / 'tracker'
 
@@ -51,7 +71,7 @@ def build_command(arguments, extra):
                '--rtsp', arguments.rtsp, '--siyi-ip', arguments.camera_ip,
                '--gimbal-mode', 'siyi_udp', '--mavlink', 'none', '--no-scan-on-start',
                '--threads', str(threads), '--kd-yaw', '0', '--kd-pitch', '0',
-               '--siyi-command-cap', str(arguments.command_cap),
+               ] + gimbal_arguments(getattr(arguments, 'gimbal_speed', 'normal'), arguments.command_cap) + [
                '--min-person-height', str(arguments.min_person_height),
                # dualtrack2 (2026-10-24): its own gimbal control and single-target selection, so no
                # --control-profile / --target-policy / --target-hold-seconds.
@@ -97,7 +117,10 @@ def main(argv=None):
                         help='Own cores for the person detector (Pi 5: 2 3; --cores then 0 1). Empty = share --cores')
     parser.add_argument('--stream', type=int, default=8080, help='MJPEG preview port, 0 = off')
     parser.add_argument('--min-person-height', type=float, default=24)
-    parser.add_argument('--command-cap', type=int, default=35)
+    parser.add_argument('--command-cap', type=int, default=None,
+                        help='SIYI speed cap 1..100; default: from --gimbal-speed (normal = 35)')
+    parser.add_argument('--gimbal-speed', choices=sorted(GIMBAL_PROFILES), default='normal',
+                        help='Gimbal response: normal (original), fast, max')
     parser.add_argument('--telemetry-port', type=int, default=9090)
     parser.add_argument('--control-port', type=int, default=9091)
     parser.add_argument('--log-dir', default=str(Path.home() / '.local/share/as2-rescue-logs/a8_tracker'))

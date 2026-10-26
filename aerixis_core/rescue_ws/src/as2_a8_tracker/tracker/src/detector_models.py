@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 FORMATS = ('ncnn', 'onnx', 'rknn', 'tensorrt', 'hef')
-IMPLEMENTED = ('ncnn', 'onnx', 'rknn')   # HEF / TensorRT: format recognised, inference still to write
+IMPLEMENTED = ('ncnn', 'onnx', 'rknn', 'hef')   # TensorRT: format recognised, inference still to write
 # Rough real heights (m) for a distance estimate from the box height; other classes: no estimate.
 REAL_HEIGHT_M = {'person': 1.7, 'dog': 0.6, 'cat': 0.3, 'horse': 1.6, 'cow': 1.5, 'sheep': 0.8,
                  'car': 1.5, 'truck': 3.0, 'bus': 3.0, 'motorcycle': 1.1, 'bicycle': 1.1, 'boat': 1.5}
@@ -323,6 +323,75 @@ class RKNNDetector(Detector):
         return self.rknn.inference(inputs=[img[:, :, ::-1][None]])[0]
 
 
+def hailo_nms_to_yolo(per_class, input_w, input_h, num_classes):
+    """Hailo on-chip NMS output -> the (4 + classes) x N YOLO array decode() reads.
+
+    per_class: one array per class, rows [y_min, x_min, y_max, x_max, score] normalised to the model
+    input (HAILO_NMS_BY_CLASS, as Hailo's YOLO HEFs and DFC nms_postprocess produce)."""
+    columns = []
+    for cls, boxes in enumerate(per_class[:num_classes]):
+        boxes = np.asarray(boxes, dtype=np.float32).reshape(-1, 5)
+        for y_min, x_min, y_max, x_max, score in boxes:
+            col = np.zeros(4 + num_classes, np.float32)
+            col[0] = (x_min + x_max) / 2 * input_w
+            col[1] = (y_min + y_max) / 2 * input_h
+            col[2] = (x_max - x_min) * input_w
+            col[3] = (y_max - y_min) * input_h
+            col[4 + cls] = score
+            columns.append(col)
+    if not columns:
+        return np.zeros((4 + num_classes, 0), np.float32)
+    return np.stack(columns, 1)
+
+
+class HailoDetector(Detector):
+    """Hailo-8 / Hailo-8L AI HAT (Pi 5) via HailoRT's hailo_platform. Inference runs on the HAT; the
+    CPU only letterboxes and decodes. HEFs with on-chip NMS (per-class boxes) and plain YOLO
+    output tensors are both read; either way the common decode applies the same class, person-size
+    and NMS rules as every other format."""
+
+    def __init__(self, info, threads=2, **kw):
+        super().__init__(info, threads, **kw)
+        from hailo_platform import (HEF, ConfigureParams, FormatType, HailoStreamInterface, InferVStreams,
+                                    InputVStreamParams, OutputVStreamParams, VDevice)
+        self.hef = HEF(info['file'])
+        self.device = VDevice()
+        params = ConfigureParams.create_from_hef(self.hef, interface=HailoStreamInterface.PCIe)
+        self.group = self.device.configure(self.hef, params)[0]
+        inputs = InputVStreamParams.make(self.group, format_type=FormatType.UINT8)
+        outputs = OutputVStreamParams.make(self.group, format_type=FormatType.FLOAT32)
+        self.in_info = self.hef.get_input_vstream_infos()[0]
+        self.out_name = self.hef.get_output_vstream_infos()[0].name
+        h, w = self.in_info.shape[0], self.in_info.shape[1]
+        if (w, h) != tuple(self.input_size):
+            self.input_size = (w, h)          # the HEF is the authority on its input size
+        self._activation = self.group.activate(self.group.create_params())
+        self._pipeline = InferVStreams(self.group, inputs, outputs)
+        self._activation.__enter__()
+        self._pipeline.__enter__()
+
+    def run(self, img):
+        rgb = np.ascontiguousarray(img[:, :, ::-1])[None]
+        out = self._pipeline.infer({self.in_info.name: rgb})[self.out_name]
+        if isinstance(out, (list, tuple)):          # on-chip NMS: [batch][class] -> boxes
+            per_class = out[0] if out and isinstance(out[0], (list, tuple)) else out
+            return hailo_nms_to_yolo(per_class, self.input_size[0], self.input_size[1], len(self.names))
+        return np.asarray(out)
+
+    def close(self):
+        for ctx in ('_pipeline', '_activation'):
+            obj = getattr(self, ctx, None)
+            if obj is not None:
+                try:
+                    obj.__exit__(None, None, None)
+                except Exception:
+                    pass
+                setattr(self, ctx, None)
+
+    def __del__(self):
+        self.close()
+
+
 def make_detector(model_dir, threads=2, min_person_height=24.0, classes=None):
     """Detector for a model folder, or a clear error why it cannot run on this board."""
     info = describe(model_dir)
@@ -331,7 +400,7 @@ def make_detector(model_dir, threads=2, min_person_height=24.0, classes=None):
             info['format'], {'onnx': 'onnxruntime', 'rknn': 'rknn-toolkit-lite2 (Rockchip NPU)',
                              'tensorrt': 'TensorRT (Jetson)', 'hef': 'HailoRT (Hailo AI HAT)',
                              'ncnn': 'ncnn'}[info['format']]))
-    kinds = {'ncnn': NCNNDetector, 'onnx': ONNXDetector, 'rknn': RKNNDetector}
+    kinds = {'ncnn': NCNNDetector, 'onnx': ONNXDetector, 'rknn': RKNNDetector, 'hef': HailoDetector}
     if info['format'] not in kinds:
         raise RuntimeError('%s inference is not implemented yet in this tracker (needs the board to test)' % info['format'])
     return kinds[info['format']](info, threads, min_person_height=min_person_height, classes=classes)

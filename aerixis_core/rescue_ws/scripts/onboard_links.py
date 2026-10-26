@@ -28,10 +28,14 @@ DEFAULTS = dict(
     mesh_peers_ip='192.168.1.255', mesh_names='drone1,drone2', mesh_passphrase='',
     fc_mode='serial', fc_device='/dev/ttyAMA0', fc_baud='921600', fc_udp_port='8888', fc_health_url='/dev/ttyACM0',
     fmu_prefix='', camera_mode='preview', camera_ip='192.168.144.25', vision_cores='0 1', detector_cores='2 3',
+    gimbal_speed='normal',
     sim_persons='20,15;-25,40',
     allow_flight=False, path_clear=False, operator_payload=False, overhead_verified=False,
     drop_min_agl='8', drop_max_agl='20', aux_set='0', aux_value='1.0', separation_m='10',
     emergency_action='RTL', guardian_timeout='3.0')
+
+
+GIMBAL_SPEEDS = ('normal', 'fast', 'max')   # as2_a8_tracker tracker_process.GIMBAL_PROFILES
 
 
 def load_settings():
@@ -266,8 +270,11 @@ def cmd_camera(value):
         return None
     if mode == 'sim' and not sim_camera_available():
         raise ValueError('The simulated camera is not installed on this onboard computer: pick Preview or Track.')
-    arguments = 'drone_id:={} vision:={} camera_ip:={} cores:="{}" detector_cores:="{}"'.format(
-        drone_id(value), mode, value('camera_ip'), value('vision_cores'), value('detector_cores'))
+    speed = str(value('gimbal_speed') or 'normal')
+    if speed not in GIMBAL_SPEEDS:
+        raise ValueError('Gimbal speed must be one of: ' + ', '.join(GIMBAL_SPEEDS))
+    arguments = 'drone_id:={} vision:={} camera_ip:={} cores:="{}" detector_cores:="{}" gimbal_speed:={}'.format(
+        drone_id(value), mode, value('camera_ip'), value('vision_cores'), value('detector_cores'), speed)
     if mode == 'sim':
         arguments += ' sim_persons:="{}"'.format(value('sim_persons'))
     return shell('ros2 launch as2_a8_tracker a8_tracker.launch.py ' + arguments, system_python_first=False)

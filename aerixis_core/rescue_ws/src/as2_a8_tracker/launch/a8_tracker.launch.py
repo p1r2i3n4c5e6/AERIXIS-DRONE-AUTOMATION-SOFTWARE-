@@ -29,7 +29,8 @@ def setup(context):
         cmd=['ros2', 'run', 'as2_a8_tracker', 'a8_tracker', '--mode', vision,
              '--camera-ip', LaunchConfiguration('camera_ip').perform(context),
              '--stream', LaunchConfiguration('stream_port').perform(context),
-             '--threads', LaunchConfiguration('threads').perform(context), '--cores'] + cores
+             '--threads', LaunchConfiguration('threads').perform(context),
+             '--gimbal-speed', LaunchConfiguration('gimbal_speed').perform(context), '--cores'] + cores
             + (['--detector-cores'] + detector_cores if detector_cores else []),
         output='screen', name='a8_tracker',
         # The tracker exits on purpose when it cannot start safely (e.g. gimbal centre not verified).
@@ -49,6 +50,8 @@ def generate_launch_description():
         DeclareLaunchArgument('camera_ip', default_value='192.168.144.25'),
         DeclareLaunchArgument('stream_port', default_value='8080'),
         DeclareLaunchArgument('threads', default_value='2'),
+        # Gimbal response: normal (original tuning), fast, max (see tracker_process.GIMBAL_PROFILES).
+        DeclareLaunchArgument('gimbal_speed', default_value='normal'),
         # Pi 5: tracker loop and video decoding on 0-1, the person detector alone on 2-3 (measured
         # 240 ms per inference vs 450 ms when everything shared 2-3). AS2 / flight nodes are not pinned.
         DeclareLaunchArgument('cores', default_value='0 1'),

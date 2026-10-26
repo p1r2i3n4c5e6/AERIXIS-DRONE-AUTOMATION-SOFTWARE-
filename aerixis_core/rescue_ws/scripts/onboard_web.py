@@ -389,6 +389,8 @@ def make_handler(port_info):
                         raise ValueError('System ID must be 1..254')
                     for key in ('gcs_baud', 'fc_baud', 'mesh_baud', 'gcs_port', 'fc_udp_port', 'mesh_port', 'gcs_bind_port'):
                         int(merged[key])
+                    if merged.get('gimbal_speed') not in links.GIMBAL_SPEEDS:
+                        raise ValueError('Gimbal speed must be one of: ' + ', '.join(links.GIMBAL_SPEEDS))
                 except (ValueError, TypeError) as exc:
                     return self.reply({'error': str(exc)}, 400)
                 links.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -598,8 +600,11 @@ flight controller itself: connect QGroundControl to the FC USB and use Vehicle S
 <div class="card wide c-pink"><h3>A8 camera<span class="dot" id="d-cam"></span></h3><div class="body camgrid"><div>
 <div class="seg" data-k="camera_mode" data-opts="off:Off,preview:Preview,track:Track,sim:Simulated"></div>
 <div class="fields"><label>Camera IP<input data-k="camera_ip"></label><label>Tracker cores<input data-k="vision_cores"></label></div>
-<div class="row"><button class="b primary" onclick="save(['camera_mode','camera_ip','vision_cores'],['camera'])">Save &amp; restart camera</button><a id="camlink" target="_blank" class="note" style="color:#9fc0ff">Full screen ↗</a></div>
-<div class="note" style="margin-top:10px">Preview: detects, gimbal still. Track: gimbal follows the lock.</div></div>
+<div class="note" style="margin:8px 0 4px">Gimbal speed (Track mode)</div>
+<div class="seg" data-k="gimbal_speed" data-opts="normal:Smooth,fast:Fast,max:Max"></div>
+<div class="row"><button class="b primary" onclick="save(['camera_mode','camera_ip','vision_cores','gimbal_speed'],['camera'])">Save &amp; restart camera</button><a id="camlink" target="_blank" class="note" style="color:#9fc0ff">Full screen ↗</a></div>
+<div class="note" style="margin-top:10px">Preview: detects, gimbal still. Track: gimbal follows the lock.
+Gimbal speed: Smooth = original; Fast / Max turn quicker and aim ahead of a moving person (check on the ground, props off).</div></div>
 <div><iframe id="cam" title="A8 tracker"></iframe><div class="note" id="camnote"></div></div></div></div>
 <section class="card wide c-lime" id="ai"><h3>AI models</h3><div class="body">
 <div class="aigrid">

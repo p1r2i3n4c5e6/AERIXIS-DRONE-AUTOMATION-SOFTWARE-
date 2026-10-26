@@ -34,6 +34,9 @@ x-onboard: &onboard
     - "c 204:* rmw"
     - "c 188:* rmw"
     - "c 166:* rmw"
+    # Hailo AI HAT /dev/hailo0. Its device number is assigned when the driver loads (510 on the
+    # first Pi 5); install_hailo_pi.sh writes the real one to .env next to this file.
+    - "c ${HAILO_MAJOR:-510}:* rmw"
 
 services:
   onboard:

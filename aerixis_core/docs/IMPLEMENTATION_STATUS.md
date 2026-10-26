@@ -3,6 +3,115 @@
 What is built, what is verified, and what is still open. This file is written to be
 accurate rather than optimistic: SITL success is not flight qualification.
 
+## 2026-10-26: NanoTrack speed-up attempt (goal: 25 fps gimbal updates while locked)
+
+While a person is locked the tracker runs ~13 fps: Track step 51-72 ms, of which NanoTrack (OpenCV
+DNN, cores 0-1) 36-65 ms, and the Pi is 94-98 % busy (camera+AI ~1.4 cores, AS2 C++ ~0.9, rescue
+Python ~1.5). Bench under that load (one update = backbone + head): OpenCV DNN 2 thr 43 ms;
+onnxruntime 1 thr 31 ms; ncnn fp32 1 thr ~25 ms; ncnn fp16 1 thr 15 ms; every 2-thread variant
+much worse (saturated cores); cores 2-3 slower (Hailo worker at nice -7 lives there).
+Built `tracker/src/nano_ncnn.py`: line-by-line port of OpenCV 4.10 tracker_nano.cpp (quirks kept:
+scale penalty uses sizeCal(targetPos), search = 2x template, int box) on the same models converted
+with pnnx (`tracker/model/nano/*.ncnn.*`). fp32: identical boxes and scores to cv2.TrackerNano on
+4 real clips x 239 frames (median 0 px); fp16 (all or backbone only) drifts 70-380 px -> not used.
+Live result (user walking, 2 min): Nano 51 -> 44 ms, tracker 12.7 -> 13.2 fps only (CPU
+saturated), and the 50 Hz gimbal loop fell 45 -> 33 Hz because the ncnn Python binding holds the
+GIL during inference (1 ms thread worst gap 9.6 ms vs 3.1 ms with OpenCV). So the default stays
+OpenCV; ncnn is opt-in (A8_NANO_BACKEND=ncnn), meant for a separate process. Tests:
+tracker/tests/test_nano_ncnn.py (parity + opt-in), 71 tracker tests pass. Pi back on TrackerNano.
+25 fps while locked needs CPU, not a faster engine in this process: options are NanoTrack on the
+Hailo HAT (needs the Dataflow Compiler), NanoTrack in its own process (ncnn, no GIL), or less load
+from the rescue Python layer.
+Plan chosen: NanoTrack on the HAT, see `docs/HAILO_NANOTRACK_PLAN.md` (after the Dataflow Compiler
+and the single-context YOLO26n detector; the image has no HailoRT multi-process service, so it runs
+in the detector worker process).
+
+## 2026-10-26: gimbal speed setting for fast movers (panel: Camera & AI -> Gimbal speed)
+
+Problem (user): a person moving a little fast leaves the frame centre. Causes found: the tracker
+caps SIYI speed at 35 of 100 units with gentle gains (kp 20/16: at half-way to the frame edge it
+asks ~30 units; the log showed yaw=35, i.e. at the cap, while following), and dualtrack2 hands the
+gimbal a target velocity of (0,0), so the controller's forward prediction never acted.
+Change: setting `gimbal_speed` (onboard_links DEFAULTS, AS2_GIMBAL_SPEED override, panel segment
+Smooth/Fast/Max, saved with "Save & restart camera") -> a8_tracker.launch.py `gimbal_speed` ->
+tracker_process `--gimbal-speed` -> GIMBAL_PROFILES:
+| profile | SIYI cap | kp yaw/pitch | look-ahead |
+|---|---|---|---|
+| normal (Smooth, default) | 35 | 20/16 | 0 (original behaviour) |
+| fast | 70 | 30/24 | 0.15 s |
+| max | 100 | 40/32 | 0.20 s |
+Look-ahead (hybrid_tracker `--lead-s`): the controller measures the locked target's image speed
+from successive observations (smoothed, reset on a new target or a >0.3 s gap) and aims at
+position + speed x (time since observation + look-ahead). Tests: tracker/tests/test_gimbal_lead.py
+(65 tracker tests + 10 package tests pass). Hot-patched into the Pi container; profile values are a
+first guess until bench-tuned.
+Gimbal fault found during the bench test: the A8 mini stopped obeying motion commands (stuck at
+yaw -25, pitch +13; centre ACKed but no movement; attitude replies fine) already before the speed
+test, so the tracker's startup centring fails and the camera link restarts. Needs a camera power
+cycle / check that nothing blocks the gimbal. Deg/s per SIYI unit not measured yet.
+After the user's power cycle (16:01 UTC) the gimbal still reported yaw -25.2 / pitch +13.1 (unchanged),
+ignored centre and speed commands and stopped answering attitude queries after a speed command,
+and the user describes it as moving freely by hand: the gimbal motors are not powered/holding.
+Camera set to Preview meanwhile (video + detection work, no gimbal commands). To check: camera
+supply voltage/current, the A8 self-centring at power-up, connector to the gimbal.
+**Fixed by the user (camera power); measured and tested 16:00-16:20 UTC:**
+- A8 mini yaw speed = ~0.72 deg/s per SIYI unit, linear: 35 -> 25, 50 -> 36, 70 -> 50, 100 -> 71 deg/s;
+  ~0.2 s to reach speed; attitude replies 20-43 ms (bench sweep, camera in Preview).
+- Live, user walking side to side, 2 min each (scratchpad cap_track.py on drone0/vision/frame):
+| | Smooth (old) | Fast | Fast + camera-motion compensation |
+|---|---|---|---|
+| median abs(err_x) (1 = frame edge) | 0.24 | 0.10 | 0.14 |
+| within 0.25 of centre | 52 % | 72 % | 77 % |
+| p90 abs(err_x) | 0.46 | 0.37 | 0.31 |
+| max gimbal command | 35 (at cap) | 70 (cap hit twice) | 70 (cap hit once) |
+| OC-SORT ID changes / "identity in doubt" releases | 1 / 0 | 11 / 5 | 1 / 0 |
+| frames in COAST (gimbal stopped) | 317 | 353 | 32 |
+| hunting (err sign flips) | 0 | 1 | 1 |
+- Why Fast alone lost the lock: OC-SORT predicts with a still camera; a fast gimbal turn moves every
+  box sideways and the person's small box (~15 px wide) lost its match -> new IDs -> identity
+  doubt -> movement stopped -> release. Fix (dual_tracking.py): before each OC-SORT update the
+  whole-image shift since the previous detector frame is measured by phase correlation on a
+  160x90 grey copy (1.5 ms on the Pi under load; ignored when the correlation is weak) and every
+  track (Kalman state, observations, frozen copy; shared arrays moved once) is moved by it.
+  `camera_motion=True` by default. Tests: tracker/tests/test_camera_motion.py (69 tracker tests pass).
+- Pi now runs Track + Fast (panel setting) with the compensation (hot-patched; code default stays
+  Smooth). Remaining limit: while locked NanoTrack costs 35-57 ms per frame on CPU cores 0-1, so
+  the tracker updates the gimbal at ~13-17 fps, not 25.
+
+## 2026-10-26: Hailo-8L AI HAT (13 TOPS) running detection on the Pi 5
+
+Host (Ubuntu 24.04, kernel 6.8.0-1065-raspi): `docker/raspberrypi5/install_hailo_pi.sh` builds
+Hailo's open-source PCIe driver v4.24.0 (hailort-drivers, 4.x = Hailo-8/8L line; 5.x is for
+Hailo-10/15), installs firmware 4.24.0 + udev rule, loads hailo_pci at boot, writes the /dev/hailo0
+major (510) to docker/raspberrypi5/.env (HAILO_MAJOR, used by compose), builds HailoRT 4.24.0 +
+hailortcli. Fixes "dpkg was interrupted" first. Chip: Device Architecture HAILO8L.
+Image: new `hailo` build stage (HailoRT 4.24.0 + hailo_platform wheel for Python 3.10, netifaces
+wheel) copied into the runtime; tracker venv has hailo_platform; compose allows
+`c ${HAILO_MAJOR:-510}:* rmw`. Tracker: detector_models.HailoDetector (InferVStreams, UINT8 RGB in,
+FLOAT32 out; on-chip NMS-by-class converted by hailo_nms_to_yolo into the common decode, so class
+filter, person size rules and lock logic are unchanged). Tests: tests/test_hailo_decode.py (62 pass).
+Model: Hailo Model Zoo v2.18.0 hailo8l/yolov8s.hef (COCO 80, on-chip NMS, 3 contexts; AGPL like
+the other YOLO models) in /data/models/objects80-yolov8s-hailo8l-640x640 (sha256 17270a35...).
+hailortcli run: ~52.8 FPS (pipelined). One frame at a time (tracker): ~40-45 ms (3 contexts reload
+each frame; the link is already PCIe Gen 3 x1, 8 GT/s, see below).
+Live on the Pi (camera + FC up, person-only classes and lock):
+| | CPU NCNN person-n512-320x192 | Hailo yolov8s 640x640 |
+|---|---|---|
+| detection median / p90 | 77 / 88 ms (~13/s) | 40 / 50 ms (~25/s, every camera frame) |
+| Pi CPU idle | 1 % | 24 % (~0.9 core freed) |
+Locked a person (score 0.72), gimbal followed. Panel note: the HEF speed estimate is a CPU formula
+(showed 8.2 Hz, locked); a real benchmark (panel) unlocks it (15.9 Hz single-frame bench under load).
+Rollback images on the Pi: pi5-cpu (previous), pi5-prev (older).
+PCIe check (2026-10-26): Ubuntu's 6.8 raspi kernel already brings the HAT link up at 8 GT/s x1
+(Gen 3) at boot (sysfs current_link_speed, kernel log "link up, 8.0 GT/s PCIe x1"); no
+dtparam=pciex1_gen=3 is needed (config.txt left unchanged). Re-measured live: detection median
+42 ms, p90 48 ms (~24/s), HAT call inside the tracker median 33 ms, tracker 24.3 fps, CPU idle
+20 %, 2.4 GHz, throttled=0x0. The remaining per-frame time is the 3-context yolov8s on the 8L,
+not the link; detection already keeps up with the 25 fps camera.
+Next: the
+user's own 640 person model via the Hailo Dataflow Compiler (needs a Hailo Developer Zone account,
+YOLOv8/YOLO11 preferred over YOLO26, 300-500 calibration images).
+
 ## 2026-10-25: Pi image built on the laptop and deployed; measured before/after
 
 Laptop cross-build for the Pi 5: docker-buildx 0.30.1 + qemu-user-static (binfmt, flags PF) on
@@ -238,7 +347,7 @@ kept): `docker compose build --no-cache --pull`, exit 0 in about 70 min, no powe
 as2-rescue-onboard:pi5 (3.66 GB) contains the PX4 1.16 code (fc_guardian on vehicle_status_v1,
 GPS deg fields), the radio fix and the empty fmu_prefix fix, so no hot patches are needed any more.
 
-Onboard service recreated on the new image. Panel PIN drone1 works. FC link changed in the panel
+Onboard service recreated on the new image. Panel PIN (user's) works. FC link changed in the panel
 from the old USB serial (ArduPilot device path) to `fc_mode udp`, `fc_udp_port 8888`: the
 MicroXRCEAgent now listens on udp4 8888. Radio: CP2102 present, gateway running on serial 57600.
 
@@ -314,7 +423,7 @@ the likely cause, not the messages — not proven without Gazebo Harmonic. Pi im
 
 Image rebuilt on the Pi (detached build, BUILD_EXIT=0; full rebuild because the gateway sits in the
 AS2 source copied early). After the restart: radio link OK (GCS "MAVLink active via Serial",
-heartbeat 1 Hz, drone0 CONNECTED, PIN drone1 accepted, both radio ends 57600).
+heartbeat 1 Hz, drone0 CONNECTED, PIN (user's) accepted, both radio ends 57600).
 New defect seen on the real Pi: `as2_platform_pixhawk` died at start with InvalidTopicNameError —
 an empty `fmu_prefix` became the text `''` (as2_core's config-file launch helper reads YAML as
 text), so topics were `''/fmu/out/...`. SITL never hit it (it uses `/droneN`). Fixed in
@@ -361,7 +470,7 @@ New API: `POST /api/pin` (change PIN, 4-32 chars), `POST /api/gimbal` (pose cent
 ground only, Track mode only; drops any lock for 10 s, then an absolute angle via the tracker's
 control port). `AS2_PANEL_PIN` in onboard.env sets the PIN when the panel first starts.
 Sensor calibration itself (compass, accel) is not in the panel: it runs on the FC via QGroundControl.
-User's PIN: `drone1` (laptop test panel set; the Pi is set when it is next on the network).
+User's PIN: (set by the user, not recorded) (laptop test panel set; the Pi is set when it is next on the network).
 Tested on the laptop: every page, wrong/right PIN, gimbal refused in Preview, PIN rule, toggle and
 segmented saves, phone width without horizontal scroll.
 

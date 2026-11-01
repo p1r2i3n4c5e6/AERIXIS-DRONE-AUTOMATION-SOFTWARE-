@@ -418,6 +418,30 @@ class EngineVisionTests(unittest.TestCase):
         self.assertIsNone(self.engine.tick())
         self.assertIn(('move', [0, 0, 12]), self.d.calls)
 
+    def test_return_on_the_ground_at_launch_succeeds_without_flying(self):
+        # Take-off aborted (SITL 2026-10-31): armed, still on the launch spot. Return must succeed
+        # so the recovery's landing runs, instead of failing and leaving the drone armed.
+        self.put(position=(0, 0, 0.2))
+        self.engine.set_home(self.e.get('vehicle'))
+        self.step()
+        self.put(position=(0.3, -0.2, 0.25))
+        vehicle = dict(self.e.get('vehicle'), armed=True); self.step(0.01); self.e.put('vehicle', vehicle)
+        self.command('ReturnToLaunch', speed=2.0)
+        result = self.engine.tick()
+        self.assertEqual(result['status'], 'SUCCESS')
+        self.assertIn('take-off aborted', result['reason'])
+        self.assertFalse([c for c in self.d.calls if c[0] == 'move'])
+
+    def test_return_from_the_air_near_launch_still_flies(self):
+        self.put(position=(0, 0, 0.2))
+        self.engine.set_home(self.e.get('vehicle'))
+        self.step()
+        self.put(position=(1, 1, 12))
+        vehicle = dict(self.e.get('vehicle'), armed=True); self.step(0.01); self.e.put('vehicle', vehicle)
+        self.command('ReturnToLaunch', speed=2.0)
+        self.assertIsNone(self.engine.tick())
+        self.assertTrue([c for c in self.d.calls if c[0] == 'move'])
+
     def test_return_climbs_to_own_height_then_flies_home_level(self):
         # Fleet return: every drone at its own height (rtl.py), climbing in place before the leg home.
         self.put(position=(0, 0, 0.2))
@@ -460,6 +484,93 @@ class EngineVisionTests(unittest.TestCase):
         self.engine.active = None
         with self.assertRaises(ValueError):
             self.engine.submit(value)
+
+    # Coverage lanes (2026-10-31) ------------------------------------------------------------
+    def on_leg(self, start, end, entry=False):
+        """The aircraft flies a planned SurveyWaypoint leg from start to end."""
+        self.engine.active = dict(operation='SurveyWaypoint', command_id='leg', mission_id='mission', run_id='run')
+        self.engine.leg = (list(start), list(end))
+        self.engine.leg_is_entry = entry
+
+    def test_no_person_response_on_the_way_to_the_first_lane(self):
+        self.put(position=(0, 0, 10), pitch=-80.0)
+        self.on_leg((0, 0, 10), (50, 0, 10), entry=True)
+        self.assertFalse(self.engine.vision.human_detected())
+        self.assertIn('first lane', self.engine.vision.deferred)
+        self.on_leg((0, 0, 10), (50, 0, 10), entry=False)       # now on a survey lane
+        self.assertTrue(self.engine.vision.human_detected())
+
+    def test_person_ahead_on_the_lane_waits_until_abeam(self):
+        self.on_leg((0, 0, 10), (50, 0, 10))
+        self.put(position=(0, 0, 10), pitch=-50.0)               # person ~8 m ahead along the lane
+        self.assertFalse(self.engine.vision.human_detected())
+        self.assertIn('ahead on the lane', self.engine.vision.deferred)
+        self.step()
+        self.put(position=(6, 0, 10), pitch=-80.0)               # lane brought the aircraft abeam
+        self.assertTrue(self.engine.vision.human_detected())
+        self.assertIsNone(self.engine.vision.deferred)
+
+    def test_person_beside_the_lane_is_a_detection_at_once(self):
+        self.on_leg((0, 0, 10), (50, 0, 10))
+        self.put(position=(10, 0, 10), pitch=-60.0, gyaw=90.0)    # looking sideways, abeam
+        self.assertTrue(self.engine.vision.human_detected())
+
+    def test_watch_and_other_ops_are_not_lane_gated(self):
+        self.put(position=(0, 0, 10), pitch=-50.0)
+        self.engine.active = dict(operation='ScanArea', command_id='s', mission_id='mission', run_id='run')
+        self.engine.leg = ((0, 0, 10), (50, 0, 10)); self.engine.leg_is_entry = True
+        self.assertTrue(self.engine.vision.human_detected())
+
+    def test_between_legs_a_far_person_is_not_a_detection(self):
+        # SITL 2026-11-01: the entry leg ended with a person locked 53 m away; with no leg
+        # running the old gate let that become a diagonal flight across the area.
+        self.engine.active = None; self.engine.leg = None; self.engine.last_goal = [0, 0, 10]
+        self.put(position=(0, 0, 10), pitch=-10.0)                # ~57 m away
+        self.assertFalse(self.engine.vision.human_detected())
+        self.assertIn('from the aircraft', self.engine.vision.deferred)
+        self.step(); self.put(position=(0, 0, 10), pitch=-60.0)   # ~6 m away: fine
+        self.assertTrue(self.engine.vision.human_detected())
+
+    def test_far_or_transit_lock_is_released_but_a_lock_ahead_on_the_lane_is_kept(self):
+        v = self.engine.vision
+        self.on_leg((0, 0, 10), (50, 0, 10), entry=True)
+        self.put(position=(0, 0, 10), pitch=-60.0)
+        v.housekeeping(self.clock())
+        self.assertIn(('vision', dict(cmd='release', suppress_s=3.0)), self.d.calls)
+        self.d.calls.clear(); self.step(5.0)
+        self.on_leg((0, 0, 10), (50, 0, 10), entry=False)
+        self.put(position=(0, 0, 10), pitch=-50.0)                # ~8 m ahead on the lane
+        v.housekeeping(self.clock())
+        self.assertNotIn(('vision', dict(cmd='release', suppress_s=3.0)), self.d.calls)
+
+    def test_nadir_search_sweeps_sideways_while_nobody_is_locked(self):
+        v = self.engine.vision
+        v.search_pitch, v.sweep_deg, v.sweep_period_s = -90.0, 30.0, 8.0
+        self.on_leg((0, 0, 10), (50, 0, 10))
+        self.put(locked=False)
+        sent = []
+        for _ in range(80):                                       # one 8 s period at 10 Hz
+            self.step(0.1); self.put(locked=False)
+            n = len(self.d.calls); v.sweep(self.clock())
+            sent += [c[1] for c in self.d.calls[n:] if c[0] == 'vision' and c[1]['cmd'] == 'set_attitude']
+        yaws = {c['yaw'] for c in sent}
+        self.assertTrue({90.0, -90.0} <= yaws)                    # both sides of the lane
+        self.assertGreaterEqual(min(c['pitch'] for c in sent), -90.0)
+        self.assertLessEqual(min(c['pitch'] for c in sent), -89.0)  # through straight down
+        self.assertGreaterEqual(min(abs(c['pitch']) for c in sent), 60.0 - 1.0)  # at most 30 deg off vertical
+        self.assertLessEqual(len(sent), 4 * 8 + 1)                 # rate-limited (<= 4/s)
+
+    def test_no_sweep_while_a_person_is_locked_or_with_a_forward_search(self):
+        v = self.engine.vision
+        v.search_pitch, v.sweep_deg = -90.0, 30.0
+        self.on_leg((0, 0, 10), (50, 0, 10))
+        self.put(locked=True); self.step(2.0); self.put(locked=True)
+        v.sweep(self.clock())
+        self.assertFalse([c for c in self.d.calls if c[0] == 'vision'])
+        v.search_pitch = -45.0                                     # forward-looking search: no sweep
+        self.put(locked=False); self.step(2.0); self.put(locked=False)
+        v.sweep(self.clock())
+        self.assertFalse([c for c in self.d.calls if c[0] == 'vision'])
 
     def test_overhead_predicate(self):
         vision = dict(fresh=True, locked=True, label='L1', suppressed=False, err_x=0.02, err_y=0.03,

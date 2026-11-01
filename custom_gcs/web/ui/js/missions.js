@@ -12,6 +12,11 @@ export const BUILTIN_FEATURES = {
   human_orbit: F({ type: 'watch', orbit: true, resume: false }),
   human_geotag_resume: F({ geotag: true }),
   human_geotag_drop_resume: F({ payload: true, geotag: true, drop: true }),
+  // GCS mission 6 (2026-11-01): lanes + geotag; the drones chosen to orbit also circle the
+  // person. A saved copy applies the orbit to every drone.
+  search_orbit: F({ geotag: true, orbit: true }),
+  // GCS mission 7: a saved copy is the search part (delivery roles are chosen per flight).
+  search_deliver: F({ geotag: true }),
   swarm_coverage: F({ camera: false, detect: false }),
 };
 

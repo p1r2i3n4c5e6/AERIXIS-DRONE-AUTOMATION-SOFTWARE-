@@ -6,35 +6,63 @@
   --font:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
   --r:14px;--r-sm:9px;--gap:14px;
-  --accent:#4f8df7;--page:#4f8df7;
+  --accent:#4f8df7;--page:#4f8df7;--theme-accent:#4f8df7;--on-accent:#fff;
   --bg:#e4ebf4;
-  --backdrop:radial-gradient(900px 600px at 0% 0%,rgba(120,160,255,.30) 0%,transparent 60%),
-             radial-gradient(800px 600px at 100% 0%,rgba(190,140,255,.22) 0%,transparent 60%),
-             radial-gradient(900px 700px at 100% 100%,rgba(60,200,190,.20) 0%,transparent 60%),
-             radial-gradient(800px 600px at 0% 100%,rgba(255,170,120,.16) 0%,transparent 60%),
-             linear-gradient(160deg,#eef3fa 0%,#e3eaf4 55%,#e6eef2 100%);
+  /* background = colour glows (--tints) over the base gradient; a single accent replaces the glows */
+  --tints:radial-gradient(900px 600px at 0% 0%,rgba(120,160,255,.30) 0%,transparent 60%),
+          radial-gradient(800px 600px at 100% 0%,rgba(190,140,255,.22) 0%,transparent 60%),
+          radial-gradient(900px 700px at 100% 100%,rgba(60,200,190,.20) 0%,transparent 60%),
+          radial-gradient(800px 600px at 0% 100%,rgba(255,170,120,.16) 0%,transparent 60%);
+  --base:linear-gradient(160deg,#eef3fa 0%,#e3eaf4 55%,#e6eef2 100%);
+  --tint-a:30%;--tint-b:18%;
+  --backdrop:var(--tints),var(--base);
   --glass:rgba(255,255,255,.62);--glass-2:rgba(255,255,255,.45);--glass-3:rgba(255,255,255,.82);
+  --panel:rgba(255,255,255,.97);
   --edge:rgba(255,255,255,.85);--line:rgba(30,48,74,.12);--line-2:rgba(30,48,74,.07);
   --shine:inset 0 1px 0 rgba(255,255,255,.9);
   --shadow:0 12px 32px -16px rgba(30,50,100,.32),0 1px 2px rgba(25,45,80,.06);
   --text:#142033;--muted:#4c5a6e;--faint:#8592a4;
   --ok:#1f9a5a;--warn:#c27d10;--bad:#d93b48;--idle:#97a2b2;
+  --side-bg:linear-gradient(180deg,#0d1833 0%,#0a1328 45%,#070e1f 100%);
   color-scheme:light;
 }
+/* Dark (standard, retuned 2026-10-30): deep slate-navy like modern dark apps — lighter than Midnight,
+   not grey. Glass stays see-through with a blue tint and colour glows behind it, so cards keep colour. */
 :root[data-theme=dark]{
+  --bg:#0f1729;
+  --tints:radial-gradient(900px 640px at 0% 0%,rgba(80,120,255,.26) 0%,transparent 62%),
+          radial-gradient(800px 600px at 100% 0%,rgba(155,100,255,.20) 0%,transparent 60%),
+          radial-gradient(900px 700px at 100% 100%,rgba(30,190,175,.16) 0%,transparent 60%),
+          radial-gradient(700px 600px at 0% 100%,rgba(240,100,150,.12) 0%,transparent 60%);
+  --base:linear-gradient(160deg,#141e35 0%,#0f1729 55%,#0e1727 100%);
+  --tint-a:28%;--tint-b:16%;
+  --glass:rgba(30,42,68,.55);--glass-2:rgba(38,52,82,.40);--glass-3:rgba(48,63,96,.82);
+  --panel:rgba(21,30,52,.97);
+  --edge:rgba(150,178,240,.15);--line:rgba(150,178,240,.13);--line-2:rgba(150,178,240,.07);
+  --shine:inset 0 1px 0 rgba(255,255,255,.07);
+  --shadow:0 16px 38px -18px rgba(0,0,0,.6);
+  --text:#e9eef7;--muted:#aab6cb;--faint:#7c899f;
+  --ok:#3fd18b;--warn:#f3b04b;--bad:#ff6b78;--idle:#7c899f;
+  --side-bg:linear-gradient(180deg,#121b31 0%,#0f172a 50%,#0c1424 100%);
+  color-scheme:dark;
+}
+/* Midnight: the original deep navy dark (2026-10-22), kept as its own choice. */
+:root[data-theme=dark][data-shade=midnight]{
   --bg:#070d1c;
-  --backdrop:radial-gradient(900px 640px at 0% 0%,rgba(70,110,255,.30) 0%,transparent 62%),
-             radial-gradient(800px 600px at 100% 0%,rgba(150,90,255,.24) 0%,transparent 60%),
-             radial-gradient(900px 700px at 100% 100%,rgba(20,190,170,.18) 0%,transparent 60%),
-             radial-gradient(700px 600px at 0% 100%,rgba(240,90,140,.14) 0%,transparent 60%),
-             linear-gradient(160deg,#0a1226 0%,#070c1a 60%,#06101a 100%);
+  --tints:radial-gradient(900px 640px at 0% 0%,rgba(70,110,255,.30) 0%,transparent 62%),
+          radial-gradient(800px 600px at 100% 0%,rgba(150,90,255,.24) 0%,transparent 60%),
+          radial-gradient(900px 700px at 100% 100%,rgba(20,190,170,.18) 0%,transparent 60%),
+          radial-gradient(700px 600px at 0% 100%,rgba(240,90,140,.14) 0%,transparent 60%);
+  --base:linear-gradient(160deg,#0a1226 0%,#070c1a 60%,#06101a 100%);
+  --tint-a:32%;--tint-b:18%;
   --glass:rgba(20,30,58,.58);--glass-2:rgba(24,36,66,.42);--glass-3:rgba(32,46,82,.80);
+  --panel:rgba(16,24,46,.97);
   --edge:rgba(150,180,255,.16);--line:rgba(150,180,255,.14);--line-2:rgba(150,180,255,.08);
   --shine:inset 0 1px 0 rgba(255,255,255,.06);
   --shadow:0 18px 40px -18px rgba(0,0,0,.7);
   --text:#e6ecf7;--muted:#a3b0c6;--faint:#717f98;
   --ok:#3fd18b;--warn:#f3b04b;--bad:#ff6b78;--idle:#717f98;
-  color-scheme:dark;
+  --side-bg:linear-gradient(180deg,#0d1833 0%,#0a1328 45%,#070e1f 100%);
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
@@ -49,7 +77,7 @@ h1,h2,h3,h4{margin:0;font-weight:650;letter-spacing:-.005em}
 
 /* ---------- sidebar ---------- */
 .app{display:grid;grid-template-columns:236px 1fr;height:100vh;transition:grid-template-columns .18s ease}
-.side{background:linear-gradient(180deg,#0d1833 0%,#0a1328 45%,#070e1f 100%);color:#d6def0;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;min-width:0;border-right:1px solid rgba(120,150,230,.12);box-shadow:6px 0 24px -12px rgba(0,0,0,.5)}
+.side{background:var(--side-bg);color:#d6def0;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;min-width:0;border-right:1px solid rgba(120,150,230,.12);box-shadow:6px 0 24px -12px rgba(0,0,0,.5)}
 .brand{display:flex;flex-direction:column;align-items:flex-start;gap:7px;margin:10px 10px 2px;padding:12px 10px 11px;border:1px solid transparent;border-radius:12px;background:none;color:inherit;text-align:left;cursor:pointer;transition:background-color .15s,border-color .15s}
 .brand:hover{background:rgba(255,255,255,.04);border-color:rgba(150,180,255,.10)}
 .brand:focus-visible{outline:2px solid #1BC0C8;outline-offset:1px}
@@ -102,7 +130,7 @@ h1,h2,h3,h4{margin:0;font-weight:650;letter-spacing:-.005em}
 .bell .count:empty{display:none}
 .notif-panel{position:absolute;top:52px;right:16px;width:390px;max-height:70vh;display:flex;flex-direction:column;border-radius:14px;background:rgba(255,255,255,.97);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid var(--edge);box-shadow:var(--shine),0 24px 50px -16px rgba(0,0,0,.45);overflow:hidden}
 .notif-panel[hidden]{display:none}
-:root[data-theme=dark] .notif-panel{background:rgba(16,24,46,.97)}
+:root[data-theme=dark] .notif-panel{background:var(--panel)}
 .notif-head{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)}
 .notif-head .faint{flex:1;font-size:11.5px}
 .notif-list{overflow:auto}
@@ -132,7 +160,7 @@ h1,h2,h3,h4{margin:0;font-weight:650;letter-spacing:-.005em}
 .g2{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
 .span2{grid-column:span 2}.span3{grid-column:span 3}.span-all{grid-column:1/-1}
 .cols-plan{display:grid;gap:var(--gap);grid-template-columns:minmax(300px,390px) minmax(0,1fr)}
-.cols-connect{display:grid;gap:var(--gap);grid-template-columns:minmax(320px,420px) minmax(0,1fr)}
+.cols-connect{display:grid;gap:var(--gap);grid-template-columns:minmax(340px,440px) minmax(0,1fr);align-items:start}
 @media (max-width:1200px){.g4{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(2,minmax(0,1fr))}.cols-plan,.cols-connect{grid-template-columns:1fr}}
 @media (max-width:860px){.app{grid-template-columns:1fr}.g2,.g3,.g4{grid-template-columns:1fr}.span2,.span3{grid-column:auto}.page-wrap{padding:12px}}
 
@@ -145,7 +173,7 @@ h1,h2,h3,h4{margin:0;font-weight:650;letter-spacing:-.005em}
 .card{position:relative;border-radius:var(--r);min-width:0;display:flex;flex-direction:column;overflow:hidden;
   background:linear-gradient(165deg,color-mix(in srgb,var(--c) 9%,transparent) 0%,transparent 42%),var(--glass)}
 .card::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--c),color-mix(in srgb,var(--c) 45%,#fff) 60%,transparent)}
-:root[data-theme=dark] .card{background:linear-gradient(165deg,color-mix(in srgb,var(--c) 16%,transparent) 0%,transparent 50%),var(--glass);border-color:color-mix(in srgb,var(--c) 22%,var(--edge))}
+:root[data-theme=dark] .card{background:linear-gradient(165deg,color-mix(in srgb,var(--c) 20%,transparent) 0%,color-mix(in srgb,var(--c) 4%,transparent) 55%),var(--glass);border-color:color-mix(in srgb,var(--c) 28%,var(--edge))}
 .card-head{display:flex;align-items:center;gap:10px;min-height:50px;padding:12px 14px 8px}
 .card-icon{width:30px;height:30px;flex:none;border-radius:9px;display:grid;place-items:center;color:#fff;
   background:linear-gradient(140deg,color-mix(in srgb,var(--c) 75%,#fff),var(--c));box-shadow:0 6px 14px -6px var(--c),inset 0 1px 0 rgba(255,255,255,.35)}
@@ -684,7 +712,7 @@ html.oc-open .app{transform:scale(.965);filter:blur(4px) saturate(.8);opacity:.3
 .oc-status{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);flex-basis:100%}
 .oc-status.bad{color:var(--bad)}
 .oc-body{position:relative;flex:1;min-height:0}
-.oc-frame{position:absolute;inset:0;width:100%;height:100%;border:0;background:#070d1c;animation:oc-fade .35s ease}
+.oc-frame{position:absolute;inset:0;width:100%;height:100%;border:0;background:var(--bg);animation:oc-fade .35s ease}
 .oc-empty{max-width:440px;margin:8vh auto 0;padding:26px;text-align:center;border-radius:18px;border:1px solid var(--edge);background:var(--glass);
   backdrop-filter:blur(14px);box-shadow:var(--shadow);animation:oc-rise .35s cubic-bezier(.2,.8,.2,1)}
 .oc-empty[hidden]{display:none}
@@ -722,3 +750,205 @@ html.oc-open .app{transform:scale(.965);filter:blur(4px) saturate(.8);opacity:.3
   .side-collapsed .side-head .brand{display:none}
   .side-collapsed .oc-step:before{left:6px;right:6px}
 }
+
+/* ---------- appearance: one accent colour for everything (like a desktop OS accent) ----------
+   data-accent=single on <html>: pages, nav items, cards and the top bar all use --theme-accent
+   (inline per-page colours lose to !important), the background glows take the accent, and the
+   sidebar gets a light accent tint. data-accent=multi (default) keeps one colour per page/card.
+   State colours (ok / warn / bad) never change. */
+:root:root[data-accent=single]{--accent:var(--theme-accent)!important;--page:var(--theme-accent)!important;
+  --tints:radial-gradient(900px 640px at 0% 0%,color-mix(in srgb,var(--theme-accent) var(--tint-a),transparent) 0%,transparent 62%),
+          radial-gradient(900px 700px at 100% 100%,color-mix(in srgb,var(--theme-accent) var(--tint-b),transparent) 0%,transparent 60%);
+  --side-bg:linear-gradient(180deg,color-mix(in srgb,var(--theme-accent) 14%,#121827) 0%,color-mix(in srgb,var(--theme-accent) 6%,#0f1422) 100%)}
+:root[data-accent=single][data-theme=dark]:not([data-shade=midnight]){
+  --side-bg:linear-gradient(180deg,color-mix(in srgb,var(--theme-accent) 14%,#121b31) 0%,color-mix(in srgb,var(--theme-accent) 6%,#0c1424) 100%)}
+:root[data-accent=single] [style*="--accent"]{--accent:var(--theme-accent)!important}
+:root[data-accent=single] [style*="--step"],:root[data-accent=single] .step{--step:var(--theme-accent)!important}
+:root[data-accent=single] :is(.card,.glass-dialog,.hop,.dc,[class^="c-"],[class*=" c-"]){--c:var(--theme-accent)!important}
+:root[data-accent=single] .mission-list .mrow{--m:var(--theme-accent)!important}
+:root[data-accent=single] :is(.btn.primary,.seg button.active,.tabs button.active,.pi-ic,.card-icon,.e-ic){color:var(--on-accent)}
+
+/* ---------- appearance panel (theme button in the top bar) ---------- */
+.ap-panel{position:absolute;top:52px;right:16px;width:404px;max-height:calc(100vh - 80px);overflow:auto;border-radius:14px;
+  background:var(--panel);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid var(--edge);
+  box-shadow:var(--shine),0 24px 50px -16px rgba(0,0,0,.45);padding:14px 16px 16px;z-index:30}
+.ap-panel[hidden]{display:none}
+.ap-panel h4{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:750;margin:14px 0 8px}
+.ap-head{display:flex;align-items:center;gap:8px}
+.ap-head b{font-size:14px}
+.ap-head .faint{margin-left:auto;font-size:11.5px}
+.ap-modes{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.ap-mode{display:flex;flex-direction:column;align-items:center;gap:6px;padding:7px 4px 8px;border-radius:11px;border:1px solid var(--line);background:var(--glass-2);cursor:pointer;font-size:11.5px;font-weight:650;color:var(--muted)}
+.ap-mode:hover{border-color:color-mix(in srgb,var(--accent) 40%,var(--line));color:var(--text)}
+.ap-mode.on{border-color:var(--accent);color:var(--text);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 30%,transparent)}
+.ap-mini{display:block;width:100%;height:38px;border-radius:7px;position:relative;overflow:hidden;border:1px solid rgba(127,127,127,.25)}
+.ap-mini i{position:absolute;left:0;top:0;bottom:0;width:26%}
+.ap-mini u{position:absolute;left:34%;right:8%;height:8px;border-radius:3px;top:9px}
+.ap-mini s{position:absolute;left:34%;width:34%;height:6px;border-radius:3px;top:23px}
+.ap-themes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.ap-theme{padding:5px 5px 7px;border-radius:11px;border:1px solid var(--line);background:var(--glass-2);cursor:pointer;text-align:left;color:var(--muted);font-size:11.5px;font-weight:650}
+.ap-theme .ap-mini{height:52px;margin-bottom:6px}
+.ap-theme:hover{color:var(--text);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+.ap-theme.on{border-color:var(--accent);color:var(--text);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 30%,transparent)}
+.ap-swatches{display:grid;grid-template-columns:repeat(9,1fr);gap:6px}
+.ap-sw{aspect-ratio:1;border-radius:8px;border:2px solid transparent;cursor:pointer;padding:0;display:grid;place-items:center;color:#fff}
+.ap-sw svg{width:14px;height:14px;opacity:0}
+.ap-sw.on{border-color:var(--text)}.ap-sw.on svg{opacity:1}
+.ap-sw:focus-visible,.ap-mode:focus-visible,.ap-theme:focus-visible,.ap-multi:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ap-multi{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;margin-bottom:8px;border-radius:11px;border:1px solid var(--line);background:var(--glass-2);cursor:pointer;text-align:left;color:var(--text)}
+.ap-multi.on{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 30%,transparent)}
+.ap-multi .ap-rainbow{width:30px;height:30px;border-radius:8px;flex:none;background:conic-gradient(#4f8df7,#22b07d,#f0a12c,#f2556b,#9b6cf6,#22b5c9,#4f8df7)}
+.ap-multi small{display:block;color:var(--muted);font-size:11.3px}
+.ap-custom{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12px;color:var(--muted)}
+.ap-custom input[type=color]{width:34px;height:26px;padding:0;border:1px solid var(--line);border-radius:7px;background:none;cursor:pointer}
+.ap-custom code{font:12px var(--mono);color:var(--text)}
+@media (max-width:520px){.ap-panel{left:8px;right:8px;width:auto}.ap-swatches{grid-template-columns:repeat(6,1fr)}}
+
+/* ---------- flight controls: four rows at the bottom of the menu (2026-10-30) ----------
+   AI + Mode / RTL + Land / Safety / Disarm. The status footer sits just above them. */
+.side-foot{margin:auto 14px 4px}
+#flight-controls{padding:0 12px 12px}
+.fc-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.fc-grid .fc-wide{grid-column:1/-1}
+.fc-btn.fc-half{grid-template-columns:18px minmax(0,1fr);gap:7px;padding:0 8px}
+.fc-grid .fc-btn{height:34px}
+#flight-controls .side-div{margin:8px 4px 8px}
+.side-foot .side-btn{margin-top:8px;height:32px}
+.side-foot .side-link{margin-top:4px}
+#steps .step{padding-top:9px;padding-bottom:9px}
+.fc-btn.fc-half .fc-ic svg{width:17px;height:17px}
+.fc-btn .fc-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fc-btn.fc-wide{justify-content:center}
+@media (min-width:861px){
+  .side-collapsed .fc-grid{grid-template-columns:1fr}
+  .side-collapsed .fc-btn.fc-half{grid-template-columns:1fr;padding:0}
+  .side-collapsed #flight-controls{padding-bottom:14px}
+}
+
+/* ---------- simulation arena (Connect, Simulation mode) + arena on the maps (2026-10-31) ---------- */
+.sim-panel{margin-top:10px;padding:12px 12px 10px;border-radius:12px;border:1px solid color-mix(in srgb,#f0a12c 40%,var(--line));
+  background:linear-gradient(160deg,color-mix(in srgb,#f0a12c 10%,transparent),transparent 60%),var(--glass-2)}
+.sim-panel .fields{grid-template-columns:1fr 1fr}
+.sim-panel .fields .sim-n{grid-column:1/-1}
+.sim-panel .fields .sim-n select{max-width:110px}
+.sim-log{max-height:150px;overflow:auto;margin:6px 0 0;padding:8px;border-radius:8px;background:var(--glass-3);font:11px/1.45 var(--mono);white-space:pre-wrap;color:var(--muted)}
+.sim-log:empty::before{content:"Nothing yet";color:var(--faint)}
+.arena-tag{display:inline-block;white-space:nowrap;padding:2px 7px;border-radius:6px;background:rgba(240,161,44,.92);color:#1b1306;font:700 10.5px var(--font)}
+.geo-truth{color:#b8650c;font-weight:650}
+:root[data-theme=dark] .geo-truth{color:#f3b04b}
+
+/* Connect, Simulation mode (2026-10-31): the arena panel leads the link card; fields never spill. */
+.sim-panel{margin-top:12px}
+.sim-title{display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.sim-title b{font-size:13.5px}
+.sim-title .faint{font-size:11.2px}
+.sim-panel .field{min-width:0}
+.sim-panel .field input,.sim-panel .field select{width:100%;box-sizing:border-box}
+.sim-panel .row .btn{flex:0 0 auto}
+.link-details{margin-top:10px}
+.link-details>summary{cursor:pointer;padding:4px 0;list-style:none}
+.link-details>summary::before{content:"▸ ";color:var(--faint)}
+.link-details[open]>summary::before{content:"▾ "}
+.link-details .fields{margin-top:8px}
+
+/* ---------- simulation start window (Connect -> Simulation, 2026-10-31) ---------- */
+.simov{position:fixed;inset:0;z-index:900;display:grid;place-items:center;padding:20px;
+  background:color-mix(in srgb,var(--bg) 45%,transparent);backdrop-filter:blur(10px) saturate(1.1);-webkit-backdrop-filter:blur(10px) saturate(1.1)}
+.simov[hidden]{display:none}
+.simov-card{--c:#f0a12c;width:min(620px,100%);max-height:calc(100vh - 40px);overflow:auto;border-radius:20px;padding:24px 26px 20px;
+  background:linear-gradient(160deg,color-mix(in srgb,var(--c) 14%,transparent),transparent 45%),var(--panel);
+  border:1px solid color-mix(in srgb,var(--c) 35%,var(--edge));box-shadow:var(--shine),0 30px 70px -20px rgba(0,0,0,.55);animation:simov-in .18s ease-out}
+@keyframes simov-in{from{opacity:0;transform:translateY(8px) scale(.985)}to{opacity:1;transform:none}}
+.simov-head{display:flex;gap:14px;align-items:center;margin-bottom:16px}
+.simov-head h2{font-size:20px;font-weight:750}
+.simov-head p{margin:3px 0 0;color:var(--muted);font-size:13px}
+.simov-ic{width:48px;height:48px;flex:none;border-radius:14px;display:grid;place-items:center;color:#fff;
+  background:linear-gradient(140deg,color-mix(in srgb,var(--c) 75%,#fff),var(--c));box-shadow:0 10px 24px -10px var(--c)}
+.simov-ic svg{width:24px;height:24px}
+.simov-ic.ok{--c:#22b07d}.simov-ic.bad{--c:#e5484d}
+.simov-ic.spin svg{animation:ar-spin 2.4s linear infinite}
+.simov-label{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:750;margin:14px 0 8px}
+.simov-count{display:grid;grid-template-columns:repeat(4,1fr);width:100%}
+.simov-count button{height:44px;justify-content:center;font-size:13px}
+.simov-count button b{font-size:17px;margin-right:2px}
+.simov-where{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:var(--glass-2);flex-wrap:wrap}
+.simov-where>span{color:var(--c);display:grid}.simov-where>span svg{width:20px;height:20px}
+.simov-where>div{flex:1;min-width:180px}
+.simov-where b{display:block;font:600 13.5px var(--mono)}
+.simov-where small{color:var(--muted);font-size:11.5px}
+.simov-check{margin-top:12px}
+.simov-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+.simov-go{height:40px;padding:0 20px;font-size:13.5px}
+.simov-bar{height:6px;margin:0 0 14px}
+.simov-bar>span{transition:width .4s ease;background:linear-gradient(90deg,var(--c),color-mix(in srgb,var(--c) 60%,#22b07d))}
+.simov-steps{display:flex;flex-direction:column;gap:6px}
+.simov-step{display:grid;grid-template-columns:26px 1fr;gap:12px;align-items:center;padding:9px 12px;border-radius:12px;border:1px solid var(--line-2);background:var(--glass-2)}
+.simov-step b{display:block;font-size:13px}
+.simov-step small{color:var(--muted);font-size:11.5px}
+.simov-dot{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;border:2px solid var(--line);color:#fff}
+.simov-dot svg{width:13px;height:13px}
+.simov-step.wait{opacity:.55}
+.simov-step.run{border-color:color-mix(in srgb,var(--c) 45%,var(--line));background:color-mix(in srgb,var(--c) 8%,var(--glass-2))}
+.simov-step.run .simov-dot{border-color:var(--c);border-right-color:transparent;animation:ar-spin .8s linear infinite}
+.simov-step.done .simov-dot{background:#22b07d;border-color:#22b07d}
+.simov-step.bad .simov-dot{background:#e5484d;border-color:#e5484d}
+.simov-more{margin-top:12px}
+.simov-more>summary{cursor:pointer}
+.simov-log{max-height:160px}
+.simov-foot{margin-top:10px;font-size:12px;text-align:right}
+@media (prefers-reduced-motion:reduce){.simov-card{animation:none}.simov-ic.spin svg,.simov-step.run .simov-dot{animation:none}}
+
+/* Draw the search area on the map (Plan, 2026-10-31) */
+.draw-bar{--c:#f2556b;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:9px 11px;margin:10px 0 0;border-radius:11px;
+  border:1px solid color-mix(in srgb,var(--c) 28%,var(--line));background:color-mix(in srgb,var(--c) 6%,var(--glass-2));transition:background .15s,border-color .15s}
+.draw-bar.on{border-color:var(--c);background:color-mix(in srgb,var(--c) 12%,var(--glass-2));box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 14%,transparent)}
+.draw-switch{display:inline-flex;align-items:center;gap:9px;cursor:pointer;user-select:none}
+.draw-switch input{position:absolute;opacity:0;width:0;height:0}
+.draw-switch .slider{position:relative;width:38px;height:21px;border-radius:21px;background:color-mix(in srgb,var(--muted) 35%,transparent);transition:background .15s;flex:none}
+.draw-switch .slider::after{content:"";position:absolute;top:2.5px;left:2.5px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px #0004;transition:transform .15s}
+.draw-switch input:checked+.slider{background:var(--c)}
+.draw-switch input:checked+.slider::after{transform:translateX(17px)}
+.draw-switch input:focus-visible+.slider{outline:2px solid var(--c);outline-offset:2px}
+.draw-switch b{display:inline-flex;align-items:center;gap:6px;font-size:12.8px;font-weight:650}
+.draw-switch b svg{width:15px;height:15px;color:var(--c)}
+.draw-info{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.draw-info.bad{color:#e5484d;font-weight:600}
+.draw-actions{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
+.draw-actions .btn svg{width:14px;height:14px}
+.draw-help{flex-basis:100%;font-size:11.5px;line-height:1.45}
+.draw-ctl-wrap{border:none!important;box-shadow:0 1px 5px #0003!important}
+.draw-ctl{display:inline-flex!important;align-items:center;gap:6px;width:auto!important;height:30px!important;padding:0 10px;font:600 12px/30px inherit;
+  color:#f2556b!important;border-radius:4px!important;white-space:nowrap;text-decoration:none}
+.draw-ctl svg{width:15px;height:15px}
+.leaflet-bar a.draw-ctl.on{background:#f2556b!important;color:#fff!important}
+.map.drawing,.map .leaflet-container.drawing,.leaflet-container.drawing{cursor:crosshair!important}
+.draw-vertex{width:16px;height:16px;border-radius:50%;background:#fff;border:3px solid #f2556b;box-shadow:0 1px 4px #0005;cursor:grab}
+.draw-vertex.first{background:#f2556b;border-color:#fff}
+.draw-vertex.can-close{animation:draw-pulse 1.2s ease-in-out infinite}
+.draw-mid{width:12px;height:12px;border-radius:50%;background:#f2556bcc;border:2px solid #fff;opacity:.75;cursor:copy}
+.draw-mid:hover{opacity:1}
+@keyframes draw-pulse{0%,100%{box-shadow:0 0 0 0 #f2556b88}50%{box-shadow:0 0 0 7px #f2556b00}}
+
+/* Notification and appearance panels were drawn under the map (2026-11-01): Leaflet's panes
+   (z-index 400-1000) competed with the top bar (20), so clicking the bell seemed to show the map.
+   Each map keeps its layers to itself; the top bar and its panels now draw above it. */
+.leaflet-container{isolation:isolate;z-index:0}
+.notif-panel{max-height:min(70vh,calc(100vh - 150px))}
+@media (max-width:520px){.notif-panel{left:8px;right:8px;width:auto}}
+
+/* Mission 6 "Search & orbit": which aircraft may orbit (2026-11-01) */
+.orbit-pick{--c:#9b6cf6;margin-top:12px;padding:10px 12px;border-radius:11px;border:1px solid color-mix(in srgb,var(--c) 28%,var(--line));
+  background:color-mix(in srgb,var(--c) 6%,var(--glass-2));display:grid;gap:8px}
+.orbit-pick.ask{border-color:var(--c);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 22%,transparent);animation:orbit-ask 1.2s ease-in-out 3}
+.orbit-list{display:flex;flex-wrap:wrap;gap:8px}
+.orbit-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:999px;border:1px solid var(--line);
+  background:var(--glass-2);cursor:pointer;font-size:12.5px;font-weight:600;user-select:none}
+.orbit-chip input{position:absolute;opacity:0;width:0;height:0}
+.orbit-chip svg{width:14px;height:14px;color:var(--muted)}
+.orbit-chip.on{border-color:var(--c);background:color-mix(in srgb,var(--c) 16%,var(--glass-2))}
+.orbit-chip.on svg{color:var(--c)}
+.orbit-chip:has(input:focus-visible){outline:2px solid var(--c);outline-offset:2px}
+@keyframes orbit-ask{50%{box-shadow:0 0 0 7px color-mix(in srgb,var(--c) 10%,transparent)}}
+/* Mission 7 roles: search (pink) / delivery (amber) */
+.role-chip.search{--c:#ec5fa0}.role-chip.delivery{--c:#f0a12c}
+.role-chip{font:inherit;font-size:12.5px;font-weight:600;color:inherit}

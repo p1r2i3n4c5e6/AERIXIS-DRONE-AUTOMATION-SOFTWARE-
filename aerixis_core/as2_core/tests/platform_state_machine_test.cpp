@@ -88,6 +88,30 @@ TEST(PlatformStateMachineTest, CorrectFSMActivation) {
   EXPECT_EQ(state_machine.getState().state, as2_msgs::msg::PlatformStatus::EMERGENCY);
 }
 
+// AERIXIS (2026-10-31): an aborted take-off ends in EMERGENCY; the aircraft must still be able
+// to land and, once the FC disarms, return to DISARMED (no way out left it armed for good).
+TEST(PlatformStateMachineTest, EmergencyExitsToSafeStates) {
+  as2::Node test_node("test_node");
+  {
+    as2::PlatformStateMachine state_machine(&test_node);
+    state_machine.setState(as2_msgs::msg::PlatformStatus::EMERGENCY);
+    EXPECT_FALSE(state_machine.processEvent(as2_msgs::msg::PlatformStateMachineEvent::TAKE_OFF));
+    EXPECT_FALSE(state_machine.processEvent(as2_msgs::msg::PlatformStateMachineEvent::TOOK_OFF));
+    EXPECT_FALSE(state_machine.processEvent(as2_msgs::msg::PlatformStateMachineEvent::ARM));
+    EXPECT_TRUE(state_machine.processEvent(as2_msgs::msg::PlatformStateMachineEvent::LAND));
+    EXPECT_EQ(state_machine.getState().state, as2_msgs::msg::PlatformStatus::LANDING);
+    EXPECT_TRUE(state_machine.processEvent(as2_msgs::msg::PlatformStateMachineEvent::LANDED));
+    EXPECT_TRUE(state_machine.processEvent(as2_msgs::msg::PlatformStateMachineEvent::DISARM));
+    EXPECT_EQ(state_machine.getState().state, as2_msgs::msg::PlatformStatus::DISARMED);
+  }
+  {
+    as2::PlatformStateMachine state_machine(&test_node);
+    state_machine.setState(as2_msgs::msg::PlatformStatus::EMERGENCY);
+    EXPECT_TRUE(state_machine.processEvent(as2_msgs::msg::PlatformStateMachineEvent::DISARM));
+    EXPECT_EQ(state_machine.getState().state, as2_msgs::msg::PlatformStatus::DISARMED);
+  }
+}
+
 TEST(PlatformStateMachineTest, TakeoffTest) {
   as2::Node test_node("test_node");
   as2::PlatformStateMachine state_machine(&test_node);

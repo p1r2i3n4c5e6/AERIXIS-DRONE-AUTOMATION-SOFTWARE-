@@ -199,6 +199,19 @@ class Fleet:
         self._one(profile)
         return result
 
+    def use(self,path):
+        """Switch to another aircraft list (Simulation and Field keep separate lists, 2026-10-31:
+        both use drone0, and the simulated drone's token must not replace the real one)."""
+        path=Path(path)
+        with self.lock:
+            if path==self.path:return {'ok':True,'changed':False,'list':path.name}
+            if any((s.get('data') or {}).get('active') for s in self.states.values()):
+                raise ValueError('An aircraft is executing a mission: switch after it has finished')
+            self.path=path
+            self.profiles=json.loads(path.read_text()) if path.exists() else {}
+            self.states={}
+        return {'ok':True,'changed':True,'list':path.name}
+
     def remove(self,drone_id):
         with self.lock:
             if drone_id not in self.profiles:raise ValueError('Unknown aircraft')

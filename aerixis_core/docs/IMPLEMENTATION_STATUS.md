@@ -3,6 +3,318 @@
 What is built, what is verified, and what is still open. This file is written to be
 accurate rather than optimistic: SITL success is not flight qualification.
 
+## 2026-11-01 (round 3): mission 7 "Search, geotag & deliver" — 2 search + 2 delivery drones
+
+User request: two drones search and geotag; the geotags go over the mesh to the delivery drones,
+which split the people between them automatically (if one takes person A the other takes
+person B), fly there and drop a package.
+- Runtime (vision_ops.py, engine.py): new operations
+  AcquireTarget (on the ground; geotags heard over the mesh + own, minus anything within the
+  claim radius of a peer's live or delivered claim; claims the nearest as 'T<x>_<y>' and keeps
+  the claim TARGET_SETTLE_S = 3 s unchallenged; simultaneous claims are settled by the existing
+  claim_wins rule — earlier claim, ties to the lower drone ID — and the loser takes the next
+  person), FlyToTarget (velocity flight at mission height, separation hold as ApproachOverhead,
+  fails TARGET_TAKEN if the claim is lost), DropAtTarget (overhead envelope, <= 1 m over the
+  geotag, <= 0.4 m/s, drop-height window, confirmed payload; same one-shot payload journal and
+  adapter as DropPayload; OverheadDropReady now also authorises DropAtTarget while steady over
+  the target). A served target stays published as this drone's claim (VisionOps.delivered)
+  after ReturnToLaunch clears the live claim, so the other delivery drone never serves it.
+  AcquireTarget/FlyToTarget are long operations (<= 1800 s). test_delivery.py: 8 tests
+  (wait for a geotag, nearest, skip a served person, simultaneous claim -> next person, fly,
+  stop if taken, one drop and keep the claim, no drop off-target/without envelope); runtime
+  suite 210 passed.
+- C++ (as2_behavior_tree rescue_nodes.hpp): AcquireTarget, FlyToTarget, DropAtTarget registered
+  (rebuilt; the installed registry has 118 nodes). The Pi image needs a rebuild before mission 7
+  can run on real drones (older images reject these node types at upload).
+- Planner: fleet entries may carry role 'search' | 'delivery'; delivery drones are left out of
+  the lane split, get an empty route bundle (same format/manifest) and trees.delivery_mission:
+  AcquireTarget on the ground -> Offboard, Arm, Takeoff -> PeersFresh -> Retry x3
+  [FlyToTarget, DropAtTarget] -> RTL, land, disarm, inside the usual safety shell. Needs a
+  custom coverage mission whose search drones geotag, and at least one search drone. Options
+  delivery_wait_s (10-1800, default 1500) and delivery_speed (<= 3 m/s). 2 new planner tests;
+  timeout test now also covers the delivery tree; planner suite 75 passed. All four trees of a
+  2+2 plan pass the drone's own upload validation (as2_mission_manager.validation).
+- GCS: mission 7 "Search, geotag & deliver" (auto planning, per-aircraft role chips Search /
+  Delivery, default first half search, at least one of each); package confirmation at upload
+  also for DropAtTarget trees; drop policy overhead. Verified in the browser with 4 drones.
+- SITL flight (arena, 4 drones, 100 x 60 m box, 2 search + 2 delivery, operator-confirmed
+  packages): search drones geotagged 4 people (0.49-0.61 m from the true positions). drone2
+  waited 87 s, claimed the first geotag (human_014), took off, flew over it, released, returned
+  and landed; drone3 waited for the second geotag (129 s), claimed THAT one (human_015, not the
+  first), flew, released, returned, landed. One release per drone in its payload journal
+  (T-44_-15 / kit_drone2, T-14_-30 / kit_drone3; state UNCERTAIN = command sent, no release
+  sensor). All four missions SUCCESS in ~5.5 min. The other 2 people got no package (two
+  delivery drones, one package each).
+
+## 2026-11-01 (round 2): mission 6 "Search & orbit" — area only, auto planning, choose who orbits
+
+User request: for orbit, no planning/waypoints — only give the area; the drones plan their own
+path, lock a person and orbit; with several drones the GCS asks which drone(s) orbit.
+- Planner (rescue_ws as2_rescue_planner/mission.py, vendored to custom_gcs): a fleet entry may
+  carry its own `features` (custom missions only). Only what a drone does with a person may
+  differ; mission type, camera, payload/drop, finish and emergency must equal the mission's
+  (refused otherwise). The result lists `aircraft_features`. 3 new tests (only the chosen drone
+  orbits, both keep searching; type/payload changes refused; needs template custom); planner
+  suite 73 passed.
+- Built from existing steps only (custom spec: coverage + geotag + orbit + resume): lanes with
+  the round-1 behaviour, approach and geotag, OrbitTarget for the set radius/laps, release,
+  rejoin the lane. No new BT node, so the current Pi image accepts it.
+- GCS (page-plan.js, missions.js, gcs.css): mission 6 "Search & orbit" (auto, orbitChoice);
+  "Which aircraft may orbit a person?" chips (remembered; one aircraft = it orbits); no Generate
+  step — as soon as the area is set (file, drawn area or arena), the conditions are accepted
+  and, with several aircraft, at least one orbit aircraft is ticked, it plans and assigns by
+  itself; without a choice it highlights the chooser. Labels show "(orbits)". Verified in the
+  browser with 4 simulated drones: asked first, then planned by itself on ticking Sim 2; only
+  drone1's tree has OrbitTarget, all four geotag.
+- SITL flight (arena, drone2 alone as orbit drone, 100 x 60 m box, radius 8 m, 1 lap): 4 people,
+  each a short move (1.4-12 m), geotag, one orbit (~60 s), rejoin the lane where it left it;
+  then RTL, land, mission SUCCESS. Geotags 0.21-0.37 m from the true people. Note: after the
+  automatic ground reconcile the drone's current geotag list is empty (journal keeps them); the
+  GCS keeps its own geotag history. Still open: 2-drone flights stop on the swarm freshness/
+  separation gate when the laptop stalls (round 1 finding).
+
+## 2026-11-01: Geotag & resume — stay on the lane, rejoin ahead, camera down with a side sweep
+
+User report (screenshots): a person seen anywhere — even on the flight to the first waypoint, far
+from the lane — made the drone leave the path diagonally, geotag, then fly back to the exact
+point where it left. Wanted: follow the lane until the person is close, short move to them,
+geotag, continue by the shortest way (no backtracking); gimbal straight down sweeping left and
+right; notification bell showed the map instead of the list.
+Runtime (rescue_ws/src/as2_rescue_runtime):
+- vision_ops.lane_gate(): while a coverage leg (SurveyWaypoint) is flown, a locked person is not
+  a detection on the transit from take-off to the first lane, nor while they are more than
+  approach_ahead_m (3 m) ahead along the lane; the lock is kept and the lane brings the aircraft
+  abeam, so the response is a short sideways move. Watch/ScanArea and other ops are unchanged.
+- engine.resume_ahead(): ResumeCoverage rejoins the interrupted leg abeam of the aircraft, or at
+  the saved interruption point if that is further along — never backwards; chosen once per
+  resume (the route check needs a fixed goal).
+- Nadir side sweep (vision_ops.sweep): with a search pitch of -80..-90 and nobody locked, the
+  runtime swings the gimbal across the lane (yaw +/-90, up to search_sweep_deg = 30 deg from
+  vertical, period search_sweep_period_s = 8 s), rate-limited to 4 commands/s, using the
+  existing set_attitude command that both the simulated and the real A8 tracker follow only
+  while no person is selected. No tracker or BT-node change, so mission files stay valid on the
+  current Pi image. New runtime parameters: search_sweep_deg, search_sweep_period_s,
+  approach_ahead_m.
+- First SITL check (2026-11-01) still showed one 53 m diagonal: a person locked on the transit
+  stayed followed by the gimbal, and in the moment between the first leg ending and the next
+  starting the gate did not apply. Now the gate covers the whole coverage (gaps between legs
+  included), a person must be within respond_radius_m (15 m) of the aircraft, and a lock the
+  gate rejects for good (transit, too far) is released so the camera sweeps again; a lock on a
+  person ahead on the lane is kept.
+- Tests: 8 new in test_vision_ops.py (entry transit, ahead/abeam, beside, watch not gated,
+  between legs far/near, release of a far lock, sweep pattern and rate, no sweep while
+  locked/forward), test_resume_coverage.py updated (rejoin abeam, never back); runtime suite
+  202 passed.
+- Landing time limit: the 600 s set on 2026-10-31 was REFUSED by the runtime (engine.submit:
+  300 s for short operations, 1800 s for LONG_OPS) -> "Invalid operation timeout", landing step
+  failed and the drone hovered at 16 m in SITL (landed with PX4 LAND). Now 300 s, accepted by
+  the current Pi image too. New planner test checks every operation timeout of every built-in
+  and custom tree against the runtime's limits (planner suite 70 passed).
+- Mission manager: the behaviour-tree runner waits up to 15 s (AS2_BT_SERVICE_WAIT_MS) for an
+  AERIXIS core service instead of 5 s; with 4 simulated drones set_offboard_mode took longer and
+  a mission failed on the ground. 18 manager tests pass.
+GCS (custom_gcs):
+- page-plan.js: Geotag missions (built-in 3/4 and custom missions with geotag) have their own
+  "Gimbal search pitch (-90 = straight down, sweeping sideways)" field, default -90,
+  remembered apart from the -45 of track/orbit missions.
+- gcs.css: .leaflet-container{isolation:isolate} — the map kept its layers (400-1000) to itself,
+  so the notification and appearance panels (inside the top bar, z 20) draw above it; the
+  notification panel fits narrow windows and stays clear of the toasts. Verified in the browser
+  at 490 px and 1440 px wide.
+
+## 2026-10-31 (later): take-off still failing — measured cause, GPU, CPU priority, landing limit
+
+User: drones still fail to take off; use the GPU if the CPU is the limit; is there a bug that also
+hits the real drone?
+Measured (new diagnostics on every "readiness lost" line: IMU messages received in the last
+second, age of the newest, longest runtime tick gap):
+- At take-off the runtime ticked normally (longest gap 0.09 s) but got only 8 IMU messages/s.
+  Probing the topics: PX4's own IMU output (sensor_measurements/imu) dropped to 0/s for whole
+  seconds while averaging 73-79/s. PX4 SITL runs in lock-step with Gazebo; with 4 onboard stacks
+  on all 16 cores (load 20-26) Gazebo is starved, PX4 freezes with it, no IMU -> "vibration_rms
+  unknown" for > 2 s -> SafetyGate(VehicleHealthy) cancels the take-off. Simulation-only: a real
+  FC is its own computer and keeps sending IMU.
+- Gazebo rendered on the Intel iGPU (iris) while the RTX 4050 was idle (12 MiB used).
+Changes:
+- custom_gcs/simulation/aerixis_sim/px4_env.sh: NVIDIA PRIME render offload (GLX + EGL) when an
+  NVIDIA GPU is present (AERIXIS_SIM_GPU=0 to disable). Verified: 3D window and server load the
+  NVIDIA GL/EGL libraries, no iris; real-time factor 0.7-0.8 -> 0.83.
+- launch/sim.sh + rescue_ws/scripts/sitl_onboard.sh: each drone's onboard software (AS2 core +
+  rescue launch, sim vision, mission manager, gateway) runs at nice 10 (ONBOARD_NICE); Gazebo,
+  PX4, the DDS agent, FC guardian and radio hub keep normal priority.
+- rescue runtime: readiness-lost lines carry the IMU/tick diagnostics (also useful on the Pi).
+- Planner (rescue_ws + custom_gcs/vendor copy): ManagedLand time limit 120 s (30 s default in the
+  simple tree) -> 600 s (LAND_TIMEOUT_S). At the limit the landing was cancelled in mid-air and the
+  drone held position low; a real landing failure still ends at once. 69 planner tests pass.
+Bugs that also affect the real drone (all fixed this session): EMERGENCY dead-end after an aborted
+take-off (as2_core), AS2 not resetting when PX4 refuses to arm (as2_platform_pixhawk), Return-to-
+launch failing on the launch spot (runtime), landing cancelled by its time limit (planner). The Pi
+image needs a rebuild to get them.
+
+## 2026-10-31 (later): why all 4 simulated drones aborted at take-off, and why Reconcile failed
+
+User report: every drone aborted the mission and Reconcile did not work. Found in the mission
+event logs, the onboard logs and PX4 (arena, 4 drones, whole-arena Geotag & resume, 15:59):
+1. Trigger: Gazebo freezes ~1 s at a time under this laptop's load (4 complete onboard stacks +
+   Gazebo, load 15-21 on 16 cores, real-time factor 0.7-0.8). Every drone's IMU stops at the same
+   instant; the runtime's vibration estimate (>= 10 IMU samples in the last second) became
+   "unknown", VehicleHealthy dropped for ~40 ms, and the tree's SafetyGate(VehicleHealthy)
+   cancelled the take-off (drone0, drone3). drone1: PX4 left OFFBOARD (offboard-loss failsafe ->
+   RTL) during the same stall; drone2: no climb 20 s after take-off. Battery was 100 % (SITL drain
+   off); PX4's "battery warning" tone is only its generic failsafe sound.
+2. The cancelled take-off made TakeoffBehavior send EMERGENCY, and AS2's platform state machine had
+   no transition out of EMERGENCY: ManagedLand failed ("EMERGENCY -> LAND"), the drones stayed
+   ARMED on the ground in OFFBOARD, and a PX4 disarm still left AS2 in EMERGENCY. Reconcile requires
+   a disarmed aircraft in DISARMED/LANDED, so it was refused. This also applies to a real drone.
+Fixes:
+- as2_core platform_state_machine.cpp: EMERGENCY -[LAND]-> LANDING and EMERGENCY -[DISARM]->
+  DISARMED (safe exits only; TAKE_OFF/TOOK_OFF/ARM from EMERGENCY still refused). New gtest
+  EmergencyExitsToSafeStates; all 5 state-machine tests pass. as2_core is a static library:
+  as2_platform_pixhawk rebuilt (the Pi image needs a rebuild to get it on the real drone).
+- rescue runtime: vibration_estimate() keeps the last estimate for VIBRATION_HOLD_S = 2 s through
+  an IMU gap (tilt and body rates still checked on every sample); test_vibration_hold.py (5 tests);
+  runtime suite 195 passed.
+- launch/sim.sh onboard: restart every drone's onboard software with PX4/Gazebo running.
+- Recovery of the stuck run: the 4 PX4s were disarmed in SITL (commander disarm -f, on the ground),
+  onboard restarted, and all 4 reconciled from the GCS (lockout cleared, can_start true).
+- Second round (same session), after re-flying 4 drones over a 3.05 ha drawn area:
+  - rescue runtime ReturnToLaunch: an ARMED drone still on its launch spot (< 1 m above and < 3 m
+    from home, take-off aborted) now succeeds without flying, so the recovery's landing runs;
+    before, "GoTo to launch position failed" skipped the landing and left it armed. 2 new tests;
+    runtime suite 193 passed.
+  - as2_platform_pixhawk: PX4 disarmed for 3 s while AS2 still says LANDED/TAKING_OFF/FLYING/
+    EMERGENCY -> walk AS2 to DISARMED (PX4 refused the arm, so there was no armed->disarmed edge).
+  - Verified: after the flight, two drones stuck in EMERGENCY were landed with PX4 LAND and went
+    EMERGENCY -> DISARMED by themselves; all 4 reconciled from the GCS.
+  - Result of the 4-drone re-flight: drone1 flew the whole mission (1 geotag, 0.09 m from the
+    true person) and landed; drones 2 and 3 took off, held their person approach 60 s because a
+    neighbour was inside the separation margin (10 m + both GPS sigmas + speeds x message age;
+    late swarm messages under load make it > the 20 m between take-off spots), gave up, returned,
+    and their landing was cancelled at its 120 s limit while still 1.4 m / 4.5 m up (EMERGENCY
+    hover). drone0: PX4 refused to arm (its DDS link dropped and reconnected under load).
+  Still open: (a) a ManagedLand timeout cancels the landing and leaves the drone hovering low (also
+  a real-drone risk); (b) landing from ~20 m took > 120 s on the loaded laptop; (c) 4 drones are
+  more than this laptop runs reliably; 1-2 drones did not show these problems; (d) take-off spots
+  20 m apart are tight for the swarm margin under load. The Pi image needs a rebuild for the core,
+  platform and runtime fixes to reach the real drone.
+
+## 2026-10-31 (later): draw the search area on the Plan map (no KML file needed)
+
+User request: a toggle on the map to draw the mission polygon point by point instead of always
+loading a KML file, for Simulation (arena) and real-drone missions alike.
+- custom_gcs/web/ui/js/areadraw.js (new): click to add corners, drag to move, drag a midpoint to
+  insert, right-click to remove, finish on the first corner / double-click / Enter, Esc stops,
+  Ctrl+Z undoes. Live corner count, area and perimeter; a crossing outline is refused; under
+  100 m² is refused; in Simulation, corners outside the arena give a warning. The drawing is kept
+  in the browser (prefs drawnArea) across reloads.
+- Plan page: "Draw area on map" switch under the map plus a "Draw area" button on the map; "Use as
+  search area" turns the polygon into a normal KML (same format as a loaded file, single outer
+  ring, no holes) and previews the plan; "Save .kml" saves it as a file. Loading a KML file and
+  "Use arena as search area" are unchanged.
+- Verified in the GCS (Simulation, 2 drones): 5-corner area of 3.05 ha drawn in the arena,
+  finished on the first corner, plan preview generated lanes for every drone. Not flown yet.
+- Not covered: no-fly zones / holes cannot be drawn (load a KML file for those).
+
+## 2026-10-31 (later): one-click loading, Add drone into the same arena, separate 3D window
+
+User request: clicking Simulation shows only a loading window (no setup), Gazebo opens, an
+Add drone button adds drones one by one into the same running arena and Gazebo window, no
+error pop-ups while it starts.
+- Loading window (custom_gcs/web/ui/js/simoverlay.js): stages only; Ready view has 3D window,
+  Add drone (< 4), Close, Go to Plan. A failed add says "The drone was not added" with the
+  launcher output; Retry finishes that drone instead of restarting the simulation.
+- launch/sim.sh: `add` (add_px4.sh spawns PX4 instance N into the running world on fixed take-off
+  slot N of (-10,-10), (10,-10), (-10,10), (10,10), then restarts sitl-onboard for N+1 drones);
+  `gui` (gazebo_gui.sh: `gz sim -g` as its own process, closing it no longer stops anything).
+  px4_env.sh holds the shared PX4/Gazebo environment and spawn_px4.
+- Fixed: the PX4 port check used `ss | grep -q` under pipefail and reported an open port as closed
+  ("drone2 PX4 did not start"); now `grep -c`. An add that stopped half-way (PX4 running, onboard
+  not restarted) is resumed by the next add/Retry without spawning another PX4.
+- Fixed: sim_control.status() turned a failed add back into "running" (the window then showed
+  "Starting…" forever); a failure now stays visible until the next start/add/stop.
+- GCS toasts muted while the simulation starts/adds/stops and 45 s after (alerts.js simSettling).
+- Verified in SITL: start 1 drone -> Add -> 2 -> Add -> 3 (after the fix, resumed), all three
+  answering on UDP 14555, one Gazebo server and one 3D window. 4 drones not re-tested (laptop load).
+
+## 2026-10-31: rescue arena simulation (PX4 SITL), drone camera window, arena on the GCS maps
+
+User request: test every mission in the user's 300 x 300 m rescue arena (custom_gcs/simulation/
+rescue_arena_300: 50 people, 180 trees, generator with a GPS origin), placed at a chosen map
+location, with geotags checked in the arena, and every drone's camera in a separate window that
+opens from the GCS Simulation mode. Tooling: custom_gcs/simulation/aerixis_sim (README.md there).
+- prepare_arena.py: arena regenerated at the chosen origin in ~/.local/share/aerixis/arena/<lat>_<lon>
+  (originals untouched); spawns in the 19 m central clearing, 20 m apart, >= 4 m from canopies
+  (1-4 drones); sim_info.json (home, spawns, persons, world).
+- models/x500_a8 (+ gimbal_a8): PX4 x500 + its gimbal camera with an A8-like 65 deg, 640x360, 15 Hz
+  camera; PX4 flies it as airframe 4001; gimbal joints driven from outside (pitch: negative = down;
+  yaw: positive = right, same as the tracker).
+- arena_px4.sh: Gazebo Harmonic with the arena world (+3D window unless GZ_GUI=0), then PX4 1.16
+  per drone in standalone mode (PX4_SIM_MODEL=gz_x500_a8, PX4_GZ_MODELS=aerixis_sim/models).
+  px4_sitl/run_px4_sitl.sh now keeps caller PX4_GZ_MODELS/WORLDS (default unchanged).
+  PX4 1.16 has no SIM_GZ_HOME_* (px4-rc.as2 errors are harmless): GPS comes from the world origin.
+- sim_cameras.py: one OpenCV window (grid) with every drone camera (gz-transport13 Python), lock
+  state/label/distance/gimbal overlay and the tracker's target cross; publishes the simulated
+  tracker's gimbal yaw/pitch to the Gazebo joints. GTK reports WND_PROP_VISIBLE=-1: close is
+  detected with WND_PROP_AUTOSIZE. --snapshot FILE for tests.
+- a8_sim_vision: persons_frame:=arena + spawn_xy + gz_world/gz_model: camera geometry from the
+  drone's TRUE Gazebo pose with arena-frame persons (a real camera sees the true world); the rescue
+  stack geotags from its own estimate. Fallback without Gazebo: persons converted to the earth frame
+  from the pose on the ground before the first take-off (the estimator's local origin is not at
+  the spawn and jumped 4-25 m while settling; drones do not share one origin). Tests:
+  rescue_ws/src/as2_a8_tracker/test/test_sim_arena.py (13 package tests pass).
+- PX4 estimated heading 6-7 deg off the true heading in this world (generic world magnetic field vs
+  WMM declination; EKF2_MAG_DECL changed live had no effect): simulation artefact, documented.
+- launch/sim.sh start N --arena --home LAT,LON[,ALT] [--no-3d] [--no-cameras]; `cameras`; stop
+  closes the window; arena runs on ROS_DOMAIN_ID 37 (a Pi on the same Wi-Fi publishes /drone0 on 0).
+  sitl_onboard.sh: SIM_INFO -> arena persons/spawn/Gazebo names per drone; home values always
+  floats (gateway crashed on home_altitude 488 as an integer).
+- GCS: sim_control.py + /api/sim/{status,arena,start,stop,cameras} (localhost only); Connect ->
+  Simulation shows the Simulation arena panel (drones, location from map centre / my location /
+  typed, 3D and camera windows, Start/Stop/Camera window, status, launcher output with tokens
+  hidden); clicking Simulation while it runs opens the camera window; link opened when ready.
+  Separate aircraft lists: /api/fleet/use (fleet_sim.json in Simulation, fleet.json in Field; only
+  the laptop may switch to the simulation list; refused while a drone executes) - the real drone0
+  token stays. "Add simulated drones" (user asked, 2026-10-31): /api/sim/pair reads
+  `launch/sim.sh pairing` on the laptop and writes those drones (up to the started count) into the
+  SIMULATION list only (refused in Field mode / from other hosts); tokens never reach the browser;
+  opens the link if closed. Field operation still never reads onboard files.
+  Closing (user asked how): camera window X did nothing (cv2.imshow re-created the closed window;
+  the closed check now runs before drawing); q/Esc; the window closes itself when the Gazebo world
+  is gone; the GCS stops leftovers (onboard stacks, camera window) when PX4+Gazebo ended because
+  the Gazebo window was closed; INT/TERM exit quietly (handler set after rclpy.init).
+  One-click Simulation (user, 2026-10-31): clicking Simulation (SITL) starts the arena at once
+  (saved drone count + location, else map centre / GCS location); when ready the page pairs the
+  simulated drones (sim list; extra drones from a bigger run removed) and opens UDP 14555 - it also
+  corrects a link left on 14550 (PX4's own heartbeat made it look healthy). No ID/token form and the
+  UDP fields fold away in Simulation. Camera window opens only when a camera mission starts
+  (Upload & start; usesCamera from the mission: not Swarm coverage). Connect cards no longer
+  stretch (align-items:start) and the arena panel fields no longer overflow.
+  Simulation and Field fully separated (user, 2026-10-31: in Field mode the GCS showed the simulated
+  drone's heartbeat as "Telemetry radio connected" because the UDP sim link stayed open; the server
+  also always listens on 14551, where the simulated gateways send). MavlinkBridge.set_mode (called by
+  /api/fleet/use, i.e. a mode click): Field closes a loopback UDP link, refuses new ones ("Field mode:
+  a link to the simulation on this laptop is not allowed") and drops local diagnostics (only the
+  simulation sends them); Simulation closes and refuses the serial radio. state.link_mode tells the
+  pages; a page that loads adopts the server's mode and only a click changes it (an old tab saved in
+  Simulation can no longer close the field radio link); start_field.sh sets Field mode before it
+  opens the radio. A Simulation page stops auto-linking while the server is in Field mode.
+  Simulation start window (user, 2026-10-31: "still unable to add drone, simulation not open"):
+  Simulation (SITL) opens web/ui/js/simoverlay.js over the blurred GCS: setup (1-4 drones, arena
+  centre pre-filled: typed -> laptop location -> map centre -> arena default, so Start never fails
+  silently - before, no location meant only a toast), then live stages from /api/sim/status
+  progress (arena, Gazebo, PX4 k/N, onboard, drones added, link + all answering), ready summary
+  with Go to Plan, failure view with launcher output and Retry. Tested from Field mode: 1 drone at
+  the map centre (28.68183, 77.49632) ready, paired and answering with no typing. Maps: arena outline + 50 ground-truth people; geotag tooltip/popup "x m from
+  human_NNN". Plan: "Use arena as search area" (arena inset 10 m as KML).
+- Verified: arena + PX4 ready for take-off; GPS = chosen home exactly; camera frames; gimbal sync;
+  2 drones from the GCS Start button (ready in ~3 min); camera window open; both trackers locked
+  with the cross on the rendered person; both drones paired in the sim list and flying a
+  human_geotag_resume mission in a 120 x 80 m box (4 people).
+- Result (2 drones, 15 m, 2 m/s, GCS API = Plan/Upload/Start): all 4 people geotagged overhead
+  (gimbal -86 deg, 14.9 m): 0.02 / 0.11 / 0.11 / 0.11 m from ground truth (reported +-1.0 m), both
+  drones back and landed after 561 s. Geotags are in the track log (as2-rescue-logs/track-*.jsonl,
+  event geotag_overhead); the GCS status list is cleared by the post-flight reset.
+
 ## 2026-10-26: NanoTrack speed-up attempt (goal: 25 fps gimbal updates while locked)
 
 While a person is locked the tracker runs ~13 fps: Track step 51-72 ms, of which NanoTrack (OpenCV

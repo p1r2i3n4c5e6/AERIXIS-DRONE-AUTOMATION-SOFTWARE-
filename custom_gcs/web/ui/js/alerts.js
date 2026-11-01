@@ -5,6 +5,18 @@
 // emergency view (emergency.js); the Emergency button opens it at any time. Onboard log lines and GCS errors can be shown as toasts too (bell → setting).
 import { toast, isFresh, rescueOf, linksOf, linkUp, prefs, stripAnsi } from './core.js';
 import { guardianOf, guardianText } from './links.js';
+import { sim } from './simarena.js';
+
+// Simulation start-up: while the simulation starts or a drone joins, and 45 s after it is ready,
+// the simulated drones log transient errors ("PX4 uXRCE-DDS disconnected", "waiting for mission
+// interpreter") before every link is up. They are not faults: no pop-ups for them (2026-10-31).
+let simState = null, simReadyAt = 0;
+function simSettling(s) {
+  if (s.mode !== 'sim') return false;
+  const st = sim.status?.state;
+  if (st !== simState) { if (st === 'running') simReadyAt = Date.now(); simState = st; }
+  return st === 'starting' || st === 'adding' || st === 'stopping' || Date.now() - simReadyAt < 45000;
+}
 
 const seen = new Map();   // key -> last value, so each condition alerts once until it clears
 const since = new Map();  // key -> first time a condition was observed (debounce)
@@ -43,7 +55,7 @@ let primed = false, gcsLogT = null;
 export function watch(s) {
   // The first poll only records the current state: no flood of toasts when the page opens.
   if (!s.stateOk && !primed) return;
-  const quiet = !primed;
+  const quiet = !primed || simSettling(s);
   const raise = (fn) => { if (!quiet) fn(); };
 
   let e = edge('gcs-offline', !s.stateOk, 3000);

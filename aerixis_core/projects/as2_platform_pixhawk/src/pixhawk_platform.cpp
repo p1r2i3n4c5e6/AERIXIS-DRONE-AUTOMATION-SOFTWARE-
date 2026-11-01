@@ -777,21 +777,45 @@ void PixhawkPlatform::px4VehicleControlModeCallback(
       this->handleStateMachineEvent(as2_msgs::msg::PlatformStateMachineEvent::ARM);
     } else {
       RCLCPP_INFO(this->get_logger(), "DISARMING");
-      // PX4 disarmed by itself (its own LAND/RTL finished, auto-disarm after landing, kill):
-      // AS2 only accepts DISARM from LANDED, so walk the state machine through its normal
-      // transitions; each event is only accepted from its own state. Otherwise AS2 stays
-      // FLYING and refuses the next arm and take-off.
-      using Event = as2_msgs::msg::PlatformStateMachineEvent;
-      const bool already = this->platform_info_msg_.status.state ==
-        as2_msgs::msg::PlatformStatus::DISARMED;               // AS2 disarmed it itself
-      if (!already && !this->handleStateMachineEvent(Event::DISARM)) {
-        this->handleStateMachineEvent(Event::TOOK_OFF);   // from TAKING_OFF
-        this->handleStateMachineEvent(Event::LAND);       // from FLYING
-        this->handleStateMachineEvent(Event::LANDED);     // from LANDING
-        this->handleStateMachineEvent(Event::DISARM);     // from LANDED
-      }
+      walkToDisarmed();
     }
     last_arm_state = this->platform_info_msg_.armed;
+  }
+
+  // AERIXIS (2026-10-31): PX4 disarmed for 3 s while AS2 still says armed/taking off/flying/
+  // EMERGENCY. Happens when PX4 refused or never received the arm (no armed -> disarmed edge
+  // above): AS2 went ARM -> TAKING_OFF -> EMERGENCY and stayed there, so the drone could never be
+  // reconciled or started again (SITL). 3 s leaves a normal arm request time to reach PX4.
+  static rclcpp::Time disarmed_mismatch_since(0, 0, RCL_ROS_TIME);
+  const bool mismatch = !this->platform_info_msg_.armed &&
+    this->platform_info_msg_.status.state != as2_msgs::msg::PlatformStatus::DISARMED;
+  if (!mismatch) {
+    disarmed_mismatch_since = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  } else if (disarmed_mismatch_since.nanoseconds() == 0) {
+    disarmed_mismatch_since = this->now();
+  } else if ((this->now() - disarmed_mismatch_since).seconds() >= 3.0) {
+    RCLCPP_WARN(
+      this->get_logger(), "PX4 is disarmed but AS2 state was %d: resetting AS2 to DISARMED",
+      this->platform_info_msg_.status.state);
+    walkToDisarmed();
+    disarmed_mismatch_since = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  }
+}
+
+void PixhawkPlatform::walkToDisarmed()
+{
+  // PX4 disarmed by itself (its own LAND/RTL finished, auto-disarm after landing, kill):
+  // AS2 only accepts DISARM from LANDED (or EMERGENCY), so walk the state machine through its
+  // normal transitions; each event is only accepted from its own state. Otherwise AS2 stays
+  // FLYING and refuses the next arm and take-off.
+  using Event = as2_msgs::msg::PlatformStateMachineEvent;
+  const bool already = this->platform_info_msg_.status.state ==
+    as2_msgs::msg::PlatformStatus::DISARMED;               // AS2 disarmed it itself
+  if (!already && !this->handleStateMachineEvent(Event::DISARM)) {
+    this->handleStateMachineEvent(Event::TOOK_OFF);   // from TAKING_OFF
+    this->handleStateMachineEvent(Event::LAND);       // from FLYING
+    this->handleStateMachineEvent(Event::LANDED);     // from LANDING
+    this->handleStateMachineEvent(Event::DISARM);     // from LANDED
   }
 }
 

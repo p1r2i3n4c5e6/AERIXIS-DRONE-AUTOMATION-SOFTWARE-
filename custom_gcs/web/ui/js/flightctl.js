@@ -35,11 +35,14 @@ export function mountFlightControls(parent) {
   safetyBtn = h('button', { class: 'fc-btn fc-safety', onclick: toggleSafety, title: 'Safety switch' });
   aiBtn = h('button', { class: 'fc-btn fc-ai', onclick: toggleAi, title: 'AI avoidance' });
   modeBtn = h('button', { class: 'fc-btn fc-mode', onclick: openModes, title: 'Flight mode' });
+  const action = (id, extra = '') => { const a = ACTIONS[id];
+    return h('button', { class: `fc-btn fc-${a.kind} ${extra}`, title: a.title, onclick: () => send(id) },
+      h('span', { class: 'fc-ic', html: icon(a.ic) }), h('span', { class: 'fc-text' }, a.label)); };
+  aiBtn.classList.add('fc-half'); modeBtn.classList.add('fc-half'); safetyBtn.classList.add('fc-wide');
+  // Four rows at the bottom of the menu (2026-10-30): AI + Mode, RTL + Land, Safety, Disarm.
   root = h('div', { class: 'fc-group' },
     h('div', { class: 'side-div', role: 'separator', 'aria-label': 'Flight controls' }),
-    safetyBtn, aiBtn, modeBtn,
-    ...Object.entries(ACTIONS).map(([action, a]) => h('button', { class: `fc-btn fc-${a.kind}`, title: a.title, onclick: () => send(action) },
-      h('span', { class: 'fc-ic', html: icon(a.ic) }), h('span', { class: 'fc-text' }, a.label))));
+    h('div', { class: 'fc-grid' }, aiBtn, modeBtn, action('RTL', 'fc-half'), action('LAND', 'fc-half'), safetyBtn, action('DISARM', 'fc-wide')));
   parent.append(root);
   update(store);
 }
@@ -130,8 +133,9 @@ function pick(title, text, drones, ok, kind) {
 function updateModeButton() {
   const drones = radioDrones();
   const navs = [...new Set(drones.map(navOf).filter(Boolean))];
-  const text = !drones.length ? 'Mode' : navs.length === 1 ? `Mode: ${navs[0]}` : navs.length ? `Mode: ${navs.length} modes` : 'Mode: —';
-  modeBtn.title = drones.length ? 'Flight mode of each aircraft (PX4). Click to change it.' : 'Flight mode: add aircraft on the Connect page first.';
+  // Half-width button: the mode name alone (icon says "mode"); the tooltip has the full text.
+  const text = !drones.length ? 'Mode' : navs.length === 1 ? navs[0] : navs.length ? `${navs.length} modes` : 'Mode —';
+  modeBtn.title = drones.length ? `Flight mode (PX4): ${navs.length ? navs.join(', ') : 'unknown'}. Click to change it.` : 'Flight mode: add aircraft on the Connect page first.';
   fill(modeBtn, [h('span', { class: 'fc-ic', html: icon('sitemap') }), h('span', { class: 'fc-text' }, text)]);
 }
 

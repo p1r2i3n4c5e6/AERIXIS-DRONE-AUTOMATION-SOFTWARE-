@@ -26,7 +26,7 @@ VISION_MODES = {
 VISION_DEFAULTS = dict(search_pitch_deg=-45.0, lost_timeout_s=3.0, track_duration_s=0.0,
                        orbit_radius_m=10.0, orbit_laps=2.0, orbit_speed=1.0,
                        approach_speed=1.0, rtl_speed=2.0, suppress_s=8.0, mesh_wait_s=30.0,
-                       search_time_s=600.0, scan_rate_dps=12.0)
+                       search_time_s=600.0, scan_rate_dps=12.0, delivery_wait_s=1500.0, delivery_speed=1.5)
 
 
 def node(kind, children=None, **ports):
@@ -107,7 +107,7 @@ def mission(mode, points, swarm_id, target_id='delivery-zone-1', segment_ids=Non
             node('Arm', service_name='set_arming_state'),
             node('ManagedTakeoff', height=points[0][2], speed=.5),
             coverage,
-            node('ManagedLand', speed=.5),
+            node('ManagedLand', speed=.5, timeout_s=LAND_TIMEOUT_S),
             node('Disarm', service_name='set_arming_state')])])
     ready = node('Timeout', msec=10000, children=[
         node('RetryUntilSuccessful', num_attempts=-1, children=[
@@ -148,13 +148,19 @@ def _wait_for(flag, msec, period=200):
 
 
 END_ACTIONS = ('RTL', 'LAND')
+# A landing is the last safety step: its time limit only guards a landing that never ends. At its
+# old 120 s a slow descent was cancelled in mid-air and the drone held position low (SITL
+# 2026-10-31); a real failure still ends the landing at once. 300 s is the onboard runtime's
+# limit for a short operation (600 s was refused: 'Invalid operation timeout') and covers 50 m at
+# 0.17 m/s.
+LAND_TIMEOUT_S = 300
 
 
 def _end_steps(action, rtl_speed):
     """How the flight ends: fly home and land (RTL) or land where the aircraft is (LAND)."""
     if action not in END_ACTIONS:
         raise ValueError('End action must be RTL or LAND')
-    land = node('ManagedLand', speed=.5, timeout_s=120)
+    land = node('ManagedLand', speed=.5, timeout_s=LAND_TIMEOUT_S)
     if action == 'LAND':
         return [land]
     return [node('ReturnToLaunch', speed=rtl_speed, timeout_s=900), land]
@@ -290,5 +296,42 @@ def vision_mission(mode, points, swarm_id, segment_ids=None, speed=.5, fleet_siz
             steps.append(_search_area(area))
     steps += [body, *_end_steps(finish, o['rtl_speed']),
               node('Disarm', service_name='set_arming_state')]
+    return _wrap_flight(steps, emergency, o['rtl_speed'])
+
+
+def delivery_mission(height, swarm_id, fleet_size=1, emergency='RTL', finish='RTL', **options):
+    """Mission 7 delivery drone (2026-11-01). No lanes: on the ground it waits for a person the
+    search drones geotagged (heard over the mesh) that nobody else serves, claims the nearest one
+    (two delivery drones never take the same person: the claim rule in vision_ops), then takes
+    off, flies over the person, drops once, returns and lands. The usual safety shell applies.
+
+      RecoverThenFail
+        Sequence: wait VehicleHealthy -> SafetyGate(VehicleHealthy)[ lifecycle ]
+        recovery: Fallback[ ReturnToLaunch -> ManagedLand , RequestRecovery (hold) ]
+      lifecycle: AcquireTarget (on the ground), Offboard, Arm, ManagedTakeoff, [mesh check],
+                 Retry x3 [ FlyToTarget, DropAtTarget ], ReturnToLaunch, ManagedLand, Disarm
+    """
+    if not swarm_id:
+        raise ValueError('Common mission group ID is required')
+    if not 1 <= float(height) <= 50:
+        raise ValueError('Delivery height must be 1..50 m')
+    o = dict(VISION_DEFAULTS)
+    o.update({k: v for k, v in options.items() if v is not None and k in VISION_DEFAULTS})
+    wait = float(o['delivery_wait_s'])
+    if not 10 <= wait <= 1800:
+        raise ValueError('Delivery wait must be 10..1800 s')
+    speed = float(o['delivery_speed'])
+    if not 0 < speed <= 3:
+        raise ValueError('Delivery speed must be in (0, 3] m/s')
+    steps = [node('AcquireTarget', timeout_s=int(wait))] + _takeoff_steps(float(height))
+    if fleet_size > 1:
+        steps.append(_wait_for('PeersFresh', o['mesh_wait_s'] * 1000))
+    # A drop refused (not yet steady over the target) is tried again after re-centring; a release
+    # already sent is never repeated (one-shot payload journal).
+    steps.append(node('RetryUntilSuccessful', num_attempts=3, children=[
+        node('Sequence', name='DeliverToTarget', children=[
+            node('FlyToTarget', speed=speed, timeout_s=600),
+            node('DropAtTarget', timeout_s=30)])]))
+    steps += [*_end_steps(finish, o['rtl_speed']), node('Disarm', service_name='set_arming_state')]
     return _wrap_flight(steps, emergency, o['rtl_speed'])
 

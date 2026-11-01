@@ -37,6 +37,26 @@ STATE_EVERY_TICKS=2  # rescue/state on every 2nd 20 Hz tick = 10 Hz (+ at once o
 # 50 Hz, as the original 50-sample buffer was at 100 Hz. A strict 0.5 s time window left the busy
 # runtime under 10 samples ("vibration_rms unknown", takeoff cancelled; SITL 2026-10-25).
 VIBRATION_SAMPLES=25
+# A short gap in IMU samples keeps the last vibration estimate this long (2026-10-31). Gazebo
+# freezing for ~1 s under load stopped the IMU of every simulated drone at once; "vibration_rms
+# unknown" then withdrew readiness and the mission tree's safety gate aborted all 4 drones at
+# take-off. Tilt and body rates are still checked on every sample; a longer gap is unknown again.
+VIBRATION_HOLD_S=2.0
+
+
+def vibration_estimate(samples, now, held=None):
+    """(rms, held) from (stamp, [ax, ay, az]) samples of the last second; >= 10 samples needed.
+
+    held = (rms, stamp) of the last real estimate: returned instead of NaN for VIBRATION_HOLD_S
+    when too few samples arrived."""
+    acc=[a for stamp,a in samples if 0<=now-stamp<1.0]
+    if len(acc)>=10:
+        mean=[sum(a[i] for a in acc)/len(acc) for i in range(3)]
+        value=math.sqrt(sum(sum((a[i]-mean[i])**2 for i in range(3)) for a in acc)/len(acc))
+        return value,(value,now)
+    if held and math.isfinite(held[0]) and 0<=now-held[1]<=VIBRATION_HOLD_S:
+        return held[0],held
+    return float('nan'),held
 
 
 def battery_fraction(msg, scale=100.0):
@@ -192,7 +212,9 @@ class RescueRuntime(Node):
         super().__init__('rescue_runtime',cli_args=args)
         self.declare_parameter('enable_motion',False);self.declare_parameter('state_dir',str(Path.home()/'.local/share/as2-rescue'/self.get_namespace().strip('/')))
         self.clock=lambda:self.get_clock().now().nanoseconds/1e9
-        self.evidence=Evidence(self.clock);self.raw={};self.acceleration=deque(maxlen=VIBRATION_SAMPLES)
+        self.evidence=Evidence(self.clock);self.raw={};self.acceleration=deque(maxlen=VIBRATION_SAMPLES);self.vibration_held=None
+        # Diagnostics for "readiness lost" lines: IMU arrival times and this node's tick gaps.
+        self.imu_rx=deque(maxlen=200);self.tick_at=deque(maxlen=60)
         folder=Path(self.get_parameter('state_dir').value);folder.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.owner_lock=open(folder/'runtime.lock','a+');fcntl.flock(self.owner_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         self.driver=RosDriver(self,self.get_parameter('enable_motion').value)
@@ -202,6 +224,11 @@ class RescueRuntime(Node):
         self.declare_parameter('min_overhead_agl_m',8.0);self.declare_parameter('max_overhead_agl_m',20.0)
         self.declare_parameter('geotag_exclusion_radius_m',6.0);self.declare_parameter('claim_exclusion_radius_m',8.0)
         self.declare_parameter('path_facing_legs',True)
+        # Nadir search (2026-10-31): gimbal straight down, swinging this far to each side of the
+        # lane over this period while nobody is locked (0 = fixed nadir); a person further ahead
+        # along the lane than approach_ahead_m is responded to only once the lane brings them abeam.
+        self.declare_parameter('search_sweep_deg',30.0);self.declare_parameter('search_sweep_period_s',8.0)
+        self.declare_parameter('approach_ahead_m',3.0);self.declare_parameter('respond_radius_m',15.0)
         # Own return height per aircraft (rtl.py): system_id comes from the onboard launch.
         self.declare_parameter('system_id',0)
         # Same value as swarm_agent's minimum_separation_m (the profile sets both; 3 m only with RTK).
@@ -211,6 +238,10 @@ class RescueRuntime(Node):
         self.driver.path_facing=bool(self.get_parameter('path_facing_legs').value)
         self.engine.vision.exclusion_radius_m=float(self.get_parameter('geotag_exclusion_radius_m').value)
         self.engine.vision.claim_radius_m=float(self.get_parameter('claim_exclusion_radius_m').value)
+        self.engine.vision.sweep_deg=max(0.0,min(60.0,float(self.get_parameter('search_sweep_deg').value)))
+        self.engine.vision.sweep_period_s=max(2.0,float(self.get_parameter('search_sweep_period_s').value))
+        self.engine.vision.approach_ahead_m=max(0.0,float(self.get_parameter('approach_ahead_m').value))
+        self.engine.vision.respond_radius_m=max(3.0,float(self.get_parameter('respond_radius_m').value))
         slot=rtl.slot_for(self.get_parameter('system_id').value,self.get_namespace().strip('/'))
         step=float(self.get_parameter('return_altitude_step_m').value)
         step=step if step>0 else float(self.get_parameter('minimum_separation_m').value)
@@ -289,7 +320,16 @@ class RescueRuntime(Node):
             mode=self.guardian[0] if self.guardian and 0<=self.clock()-self.guardian[1]<=1.5 else None
             self.evidence.put('platform',dict(armed=bool(msg.armed),offboard=bool(msg.offboard),connected=bool(msg.connected),
                 state=msg.status.state,px4_mode=mode),stamp)
-        if key=='imu':self.acceleration.append((stamp,[msg.linear_acceleration.x,msg.linear_acceleration.y,msg.linear_acceleration.z]))
+        if key=='imu':
+            self.acceleration.append((stamp,[msg.linear_acceleration.x,msg.linear_acceleration.y,msg.linear_acceleration.z]))
+            self.imu_rx.append(self.clock())
+    def input_diagnostics(self):
+        """' [IMU n/s received, newest x s old; longest tick gap y s]': tells a starved runtime
+        (few IMU messages handled, long tick gaps) from a silent flight controller."""
+        now=self.clock();rx=[t for t in self.imu_rx if 0<=now-t<=1.0]
+        newest=now-self.imu_rx[-1] if self.imu_rx else float('nan')
+        ticks=list(self.tick_at);gap=max((b-a for a,b in zip(ticks,ticks[1:])),default=float('nan'))
+        return ' [IMU %d/s received, newest %.2f s old; longest tick gap %.2f s]'%(len(rx),newest,gap)
     def vision_frame(self,msg):
         try:frame=json.loads(msg.data)
         except ValueError:return
@@ -339,9 +379,7 @@ class RescueRuntime(Node):
         if fraction is None:return
         q=pose.pose.orientation;norm=q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w
         tilt=math.degrees(math.acos(max(-1,min(1,1-2*(q.x*q.x+q.y*q.y)))))
-        acc=[a for stamp,a in self.acceleration if self.clock()-stamp<1.0]
-        mean=[sum(a[i] for a in acc)/len(acc) for i in range(3)] if acc else [0]*3
-        vibration=math.sqrt(sum(sum((a[i]-mean[i])**2 for i in range(3)) for a in acc)/len(acc)) if len(acc)>=10 else float('nan')
+        vibration,self.vibration_held=vibration_estimate(self.acceleration,self.clock(),self.vibration_held)
         v=twist.twist.linear;w=imu.angular_velocity;p=pose.pose.position
         yaw=math.atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z))
         # Earth-frame velocity (AS2's twist is in the body frame), for in-flight avoidance.
@@ -383,6 +421,7 @@ class RescueRuntime(Node):
         hold=self.engine.vision.hold
         return hold if hold and (self.engine.active or {}).get('operation')==hold.get('op') else None
     def tick(self):
+        self.tick_at.append(self.clock())
         try:
             self.driver.poll();self.vehicle();flags=self.engine.flags()
             if self.engine.safety.abort_reason!=getattr(self,'logged_reason',''):
@@ -425,7 +464,7 @@ class RescueRuntime(Node):
             health=state['flags'].get('health') or ''
             if health!=getattr(self,'health_note',''):
                 # Why VehicleHealthy is false (SafetyGate fails the flight on it): one line per change.
-                if health:self.get_logger().warning('Vehicle readiness lost: '+health)
+                if health:self.get_logger().warning('Vehicle readiness lost: '+health+self.input_diagnostics())
                 else:self.get_logger().info('Vehicle readiness back')
             self.health_note=health
             hold=(state['hold'] or {}).get('note') or ''

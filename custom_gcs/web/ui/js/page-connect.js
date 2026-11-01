@@ -2,6 +2,9 @@
 // field, UDP in SITL), then register the aircraft that answer on that link.
 import { h, icon, card, badge, hint, api, store, prefs, toast, fill, refreshPorts, linkUp, isFresh, rescueOf, fmtAge, confirmDialog } from './core.js';
 import { archPanel } from './links.js';
+import { sim, refreshSim, watchSim } from './simarena.js';
+import { createSimOverlay } from './simoverlay.js';
+import { gcsPosition } from './mapview.js';
 
 const BAUDS = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
 
@@ -32,11 +35,14 @@ export const page = {
     this.disconnectBtn = h('button', { class: 'btn', onclick: () => this.disconnect() }, 'Close');
     this.linkStatus = h('dl', { class: 'kv' });
     this.modeHelp = h('div');
+    // Simulation: the arena panel on top; the UDP fields are technical, so they fold away.
+    this.simHost = h('div');
+    this.udpBox = h('details', { class: 'link-details' }, h('summary', { class: 'kicker' }, 'Link settings (UDP)'), this.udpFields);
     this.linkCard = card({ title: '1 · Telemetry link', sub: 'GCS ↔ onboard gateway', ic: 'radio', accent: 'violet',
       right: h('button', { class: 'btn sm ghost', title: 'Rescan serial ports', onclick: async () => { await refreshPorts(); this.fillPorts(); }, html: icon('refresh') }) },
-      this.modeSeg, this.serialFields, this.udpFields, h('div', { class: 'row' }, this.connectBtn, this.disconnectBtn),
+      this.modeSeg, this.simHost, this.serialFields, this.udpBox, h('div', { class: 'row' }, this.connectBtn, this.disconnectBtn),
       h('div', { class: 'sep', style: { margin: '2px 12px' } }), this.linkStatus, this.modeHelp);
-    for (const el of [this.serialFields, this.udpFields]) el.style.marginTop = '10px';
+    for (const el of [this.serialFields, this.udpBox]) el.style.marginTop = '10px';
     // --- aircraft
     this.simBox = h('div');
     const f = this.form = {
@@ -50,14 +56,160 @@ export const page = {
         h('label', { class: 'field' }, 'System ID', f.sys, h('small', {}, 'PX4 MAV_SYS_ID')), h('label', { class: 'field', style: { gridColumn: 'span 2' } }, 'Pairing token', f.token)),
       h('div', { class: 'row', style: { marginTop: '8px' } }, this.addBtn));
     this.table = h('div');
-    this.aircraftCard = card({ title: '2 · Aircraft on this link', sub: 'ID · system ID · onboard status', ic: 'drone', accent: 'teal' }, this.simBox, this.table, h('div', { class: 'sep' }), this.manual);
+    this.manualSep = h('div', { class: 'sep' });
+    this.aircraftCard = card({ title: '2 · Aircraft on this link', sub: 'ID · system ID · onboard status', ic: 'drone', accent: 'teal' }, this.simBox, this.table, this.manualSep, this.manual);
     // Per-aircraft architecture: every hop GCS -> gateway -> AERIXIS core -> XRCE-DDS -> PX4, vehicle, data.
     this.archTabs = h('div', { class: 'seg' }); this.archBox = h('div'); this.archPanels = new Map();
     this.archCard = h('div', { class: 'arch-wrap' }, h('div', { class: 'row', style: { margin: '18px 0 10px' } },
       h('h3', { class: 'section-title' }, 'System architecture — per aircraft'), this.archTabs), this.archBox);
     root.append(h('section', { class: 'card c-blue', style: { marginBottom: '14px' } }, h('div', { class: 'card-head' }, h('div', { class: 'card-icon', html: icon('wave') }), h('div', {}, h('h3', {}, 'Connection chain'), h('p', {}, 'fleet overview — each hop turns green once confirmed live'))), this.pipe),
       h('div', { class: 'cols-connect' }, this.linkCard, this.aircraftCard), this.archCard);
+    this.buildSimPanel();
     this.fillPorts(); this.setMode(store.mode, true);
+  },
+  // ---------- Simulation arena (Simulation mode only, started from this GCS computer) ----------
+  buildSimPanel() {
+    const saved = prefs.get('simArena', {});
+    this.simN = h('select', {}, ...[1, 2, 3, 4].map(n => h('option', { value: n, selected: (saved.drones || 1) === n }, n)));
+    this.simLat = h('input', { type: 'number', step: '0.000001', value: saved.lat ?? '', placeholder: 'latitude' });
+    this.simLon = h('input', { type: 'number', step: '0.000001', value: saved.lon ?? '', placeholder: 'longitude' });
+    this.sim3d = h('input', { type: 'checkbox', checked: saved.show3d ?? true });
+    this.simCam = h('input', { type: 'checkbox', checked: saved.cameraOnMission ?? true });
+    const setLoc = (lat, lon, what) => { this.simLat.value = (+lat).toFixed(6); this.simLon.value = (+lon).toFixed(6); toast('Arena location', `${what}: ${(+lat).toFixed(5)}, ${(+lon).toFixed(5)}`); };
+    this.simStart = h('button', { class: 'btn primary', onclick: async () => { if (await this.startSim(!sim.status?.components?.px4)) this.overlay.open(true); } }, h('span', { html: icon('play') }), 'Start simulation');
+    this.simAddBtn = h('button', { class: 'btn', title: 'One more drone in the same arena (same Gazebo world), up to 4', onclick: () => this.overlay.add() }, h('span', { html: icon('plus') }), 'Add drone');
+    this.sim3dBtn = h('button', { class: 'btn', title: 'Open the Gazebo 3D window of the running arena', onclick: () => this.openGui() }, h('span', { html: icon('grid') }), '3D window');
+    this.simStop = h('button', { class: 'btn', onclick: () => this.stopSim() }, h('span', { html: icon('stop') }), 'Stop');
+    this.simCamBtn = h('button', { class: 'btn', title: 'Open the window with every simulated drone camera', onclick: () => this.openCameras(true) }, h('span', { html: icon('camera') }), 'Camera window');
+    this.simState = h('div', { class: 'sim-state' });
+    this.simLog = h('pre', { class: 'sim-log' });
+    this.simPanel = h('div', { class: 'sim-panel' },
+      h('div', { class: 'sim-title' }, h('b', {}, 'Simulation arena'), h('span', { class: 'faint' }, '300 × 300 m · 50 people · 180 trees')),
+      h('div', { class: 'fields', style: { marginTop: '8px' } },
+        h('label', { class: 'field sim-n' }, 'Drones', this.simN, h('small', {}, '1 to 4, 20 m apart in the arena centre')),
+        h('label', { class: 'field' }, 'Latitude', this.simLat), h('label', { class: 'field' }, 'Longitude', this.simLon)),
+      h('div', { class: 'row', style: { marginTop: '6px', flexWrap: 'wrap' } },
+        h('span', { class: 'faint', style: { fontSize: '11.5px' } }, 'Arena centre:'),
+        h('button', { class: 'btn sm', onclick: () => { const c = prefs.get('mapCenter', null); c ? setLoc(c[0], c[1], 'Map centre') : toast('No map yet', 'Open the Plan or Operations map and move it to your area first.', 'warn'); } }, h('span', { html: icon('map') }), 'Map centre'),
+        h('button', { class: 'btn sm', onclick: () => { const f = gcsPosition.fix; f ? setLoc(f.lat, f.lon, 'Your location') : toast('Location unknown', 'Allow location in the browser, or use the map centre.', 'warn'); } }, h('span', { html: icon('gps') }), 'My location')),
+      h('div', { class: 'row', style: { marginTop: '8px', flexWrap: 'wrap', gap: '14px' } },
+        h('label', { class: 'check' }, this.sim3d, h('span', {}, '3D world window (Gazebo)')),
+        h('label', { class: 'check' }, this.simCam, h('span', {}, 'Camera window when a camera mission starts'))),
+      h('div', { class: 'row', style: { marginTop: '10px', flexWrap: 'wrap' } }, this.simStart, this.simAddBtn, this.sim3dBtn, this.simCamBtn, this.simStop),
+      this.simState,
+      h('details', {}, h('summary', { class: 'kicker', style: { cursor: 'pointer', marginTop: '6px' } }, 'Launcher output'), this.simLog));
+    sim.listeners.add(() => this.renderSim());
+    // The big start window (setup -> live stages -> ready); the work is done by this page.
+    this.overlay = createSimOverlay({
+      values: () => this.simValues(),
+      setDrones: n => { this.simN.value = n; this.simValues(); },
+      location: () => this.simLocation(true),
+      useMyLocation: () => { const f = gcsPosition.fix; if (f) setLoc(f.lat, f.lon, 'Your location'); else toast('Location unknown', 'Allow location for this page in the browser, or use the map centre.', 'warn'); },
+      useMapCentre: () => { const c = prefs.get('mapCenter', null); if (c) setLoc(c[0], c[1], 'Map centre'); else toast('No map position yet', 'Open the Plan or Operations map once, or type latitude/longitude in the Simulation panel.', 'warn'); },
+      checkbox3d: () => h('input', { type: 'checkbox', checked: this.sim3d.checked, onchange: e => { this.sim3d.checked = e.target.checked; this.simValues(); } }),
+      start: () => this.startSim(true),
+      stop: () => this.stopSim(),
+      add: () => this.addDrone(),
+      gui: () => this.openGui(),
+    });
+  },
+  simValues() {
+    const lat = parseFloat(this.simLat.value), lon = parseFloat(this.simLon.value);
+    const v = { drones: +this.simN.value, lat, lon, show3d: this.sim3d.checked, cameraOnMission: this.simCam.checked };
+    prefs.set('simArena', v);
+    return v;
+  },
+  /** Arena centre: typed, else this laptop's location, else the map centre, else the arena's own
+   *  default (PX4's test field), so Start never fails for want of a location. */
+  simLocation(withSource) {
+    let lat = parseFloat(this.simLat.value), lon = parseFloat(this.simLon.value), source = 'chosen in the Simulation panel';
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      const f = gcsPosition.fix, c = prefs.get('mapCenter', null);
+      if (f) { [lat, lon, source] = [f.lat, f.lon, 'your location (this laptop)']; }
+      else if (c) { [lat, lon, source] = [c[0], c[1], 'where the map is looking']; }
+      else { [lat, lon, source] = [47.397742, 8.545594, 'arena default (no location yet: press My location or Map centre)']; }
+    }
+    return withSource ? { lat: +lat, lon: +lon, source } : [+lat, +lon];
+  },
+  async startSim(auto) {
+    const [lat, lon] = this.simLocation(), v = this.simValues();
+    const running = sim.status?.components?.px4;
+    if (!auto && running && !(await confirmDialog('Restart the simulation?', `The running simulation stops and starts again with ${v.drones} drone(s) at ${lat.toFixed(5)}, ${lon.toFixed(5)}.`, { ok: 'Restart' }))) return false;
+    try {
+      // The camera window opens later, when a mission that uses the camera starts (Upload & start).
+      await api('/api/sim/start', { drones: v.drones, home: [lat, lon, 0], show3d: v.show3d, cameras: false });
+      this.simWasReady = false; this.simPaired = false; this.overlay?.setDrones(v.drones);
+      if (!this.overlay?.isOpen) toast('Starting the simulation', `${v.drones} drone(s) at ${lat.toFixed(4)}, ${lon.toFixed(4)} — about 1–3 minutes.`, 'ok', 8000);
+      refreshSim();
+      return true;
+    } catch (e) { toast('Simulation not started', e.message, 'bad', 9000); return false; }
+  },
+  async stopSim() {
+    if (!(await confirmDialog('Stop the simulation?', 'PX4, Gazebo, the simulated onboard software and the camera window are closed.', { ok: 'Stop', kind: 'danger' }))) return false;
+    try { await api('/api/sim/stop', {}); toast('Stopping the simulation'); refreshSim(); return true; } catch (e) { toast('Stop failed', e.message, 'bad'); return false; }
+  },
+  async pairSim(quiet) {
+    try { const r = await api('/api/sim/pair', {}); this.simPaired = true;
+      if (!quiet) toast('Simulated drones added', `${r.added.join(', ')} — in the simulation aircraft list only.`, 'ok');
+      if (!linkUp()) this.connect(); }
+    catch (e) { if (!quiet) toast('Simulated drones not added', e.message, 'warn', 9000); }
+  },
+  async addDrone() {
+    try {
+      const r = await api('/api/sim/add', {});
+      this.simN.value = r.drones; this.simValues(); this.overlay.setDrones(r.drones);
+      toast(`Adding drone ${r.drones}`, 'It joins the same arena and Gazebo window; the others wait on the ground.', 'ok');
+      refreshSim(); return true;
+    } catch (e) { toast('Drone not added', e.message, 'warn', 9000); return false; }
+  },
+  async openGui() {
+    try { await api('/api/sim/gui', {}); toast('Gazebo 3D window', 'Opening (it can take a few seconds).', 'ok'); }
+    catch (e) { toast('3D window', e.message, 'warn'); }
+  },
+  async openCameras(manual) {
+    try { const r = await api('/api/sim/cameras', {}); if (manual || r.result === 'opened') toast('Drone camera window', r.result === 'opened' ? 'Opening in its own window.' : 'Already open.', 'ok'); }
+    catch (e) { if (manual) toast('Camera window', e.message, 'warn'); }
+  },
+  renderSim() {
+    if (!this.simPanel) return;
+    const st = sim.status, comps = st?.components || {}, state = st?.state || (sim.error ? 'unavailable' : '…');
+    const busy = state === 'starting' || state === 'stopping' || state === 'adding';
+    this.simStart.disabled = busy; this.simStop.disabled = busy || !(comps.px4 || state === 'failed'); this.simCamBtn.disabled = !comps.px4;
+    this.simStart.lastChild.textContent = comps.px4 ? 'Restart' : 'Start simulation';
+    this.simAddBtn.disabled = busy || state === 'adding' || !comps['sitl-onboard'] || +(st?.settings?.drones || 1) >= 4;
+    this.sim3dBtn.disabled = !comps.px4 || !!comps['gazebo-gui'];
+    const kind = state === 'running' ? 'ok' : state === 'failed' || state === 'unavailable' ? 'bad' : busy ? 'warn' : '';
+    const parts = comps.px4 ? [`PX4 + Gazebo ${comps.px4 ? 'on' : 'off'}`, `onboard ${comps['sitl-onboard'] ? 'on' : 'off'}`, `cameras ${comps['sim-cameras'] ? 'open' : 'closed'}`] : [];
+    fill(this.simState, [h('div', { class: 'row', style: { marginTop: '8px', gap: '8px', flexWrap: 'wrap' } },
+      h('span', { class: `dot ${kind}` }), h('b', {}, { running: 'Running', starting: 'Starting…', adding: 'Adding a drone…', stopping: 'Stopping…', failed: 'Failed', idle: 'Not running' }[state] || state),
+      h('span', { class: 'muted', style: { fontSize: '12px' } }, sim.error || st?.message || ''),
+      parts.length ? h('span', { class: 'faint', style: { fontSize: '11.5px' } }, parts.join(' · ')) : null),
+      comps.px4 ? hint(h('span', {}, 'Next: Plan → ', h('b', {}, 'Use arena as search area'), ', pick a mission, then Upload & start. The camera window opens with a camera mission.')) : null]);
+    this.simLog.textContent = (st?.log || []).join('\n');
+    // Ready (or found running after a GCS restart): add the simulated drones to the simulation
+    // list and open the UDP link, once, without any typing.
+    const ready = state === 'running' && !!comps['sitl-onboard'];
+    // Another GCS window switched the server to Field mode: never touch the link from here.
+    const fieldElsewhere = store.state?.link_mode === 'real';
+    if (fieldElsewhere && store.mode === 'sim') this.simState.append(hint('The GCS link is in Field mode (another GCS window chose Field radio). Click Simulation (SITL) here to use the simulation again.', 'warn'));
+    if (ready && store.mode === 'sim' && !fieldElsewhere) {
+      const ids = new Set(store.fleet.map(d => d.drone_id));
+      const want = +(st?.settings?.drones || 0);
+      const wanted = new Set([...Array(want).keys()].map(i => 'drone' + i));
+      const missing = !want || [...wanted].some(id => !ids.has(id)) || [...ids].some(id => !wanted.has(id));
+      if (missing && !this.simPairing && Date.now() - (this.simPairedAt || 0) > 10000) { this.simPairedAt = Date.now(); this.simPairing = true; this.pairSim(true).finally(() => { this.simPairing = false; }); }
+      else {
+        // The simulated radio is UDP 14555. A link on 14550 (PX4's own port, the server default)
+        // shows PX4's heartbeat and looks fine, but no drone answers there.
+        const conn = store.state?.connection || {};
+        const wrong = conn.type !== 'udp' || !/:14555$/.test(String(conn.target || ''));
+        if ((wrong || !linkUp()) && !this.simLinking) {
+          this.simLinking = true; this.udpHost.value = '127.0.0.1'; this.udpPort.value = 14555;
+          this.connect().finally(() => { setTimeout(() => { this.simLinking = false; }, 8000); });
+        }
+      }
+    }
+    this.simWasReady = ready;
   },
   fillPorts() {
     const keep = this.port.value || prefs.get('port', '');
@@ -67,14 +219,28 @@ export const page = {
   },
   setMode(mode, silent) {
     store.mode = mode; prefs.set('mode', mode);
+    // Simulation and Field have separate aircraft lists AND links on the GCS server. Only a click
+    // changes the server's mode; a page that loads adopts the server's mode (see update()), so an old
+    // tab can never close the field radio link.
+    if (!silent) api('/api/fleet/use', { mode }).then(r => {
+      if (r.changed) toast(mode === 'sim' ? 'Simulation aircraft' : 'Field aircraft', `Using the ${mode === 'sim' ? 'simulation' : 'field'} aircraft list.`);
+      if (r.link_closed) toast('Link closed', `${mode === 'sim' ? 'Simulation' : 'Field'} mode closed the ${r.link_closed}.`, 'warn', 8000);
+    }).catch(e => toast('Mode not switched on the GCS', e.message, 'warn', 9000));
     this.modeSeg.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
     const sim = mode === 'sim';
-    this.serialFields.style.display = sim ? 'none' : ''; this.udpFields.style.display = sim ? '' : 'none';
-    fill(this.modeHelp, [sim
-      ? hint(h('span', {}, 'Start the simulation with ', h('b', { class: 'mono' }, 'launch/sim.sh start N'), '. All N simulated aircraft answer on UDP 14555.'))
-      : hint(h('span', {}, 'Plug in the GCS radio. On each Pi open the onboard GUI, connect its FC and GCS radio, and read its ', h('b', {}, 'pairing token'), '.'))]);
+    this.serialFields.style.display = sim ? 'none' : ''; this.udpBox.style.display = sim ? '' : 'none';
+    // Simulated drones are added by the simulation itself: no ID / token form in Simulation.
+    this.manual.style.display = this.manualSep.style.display = sim ? 'none' : '';
+    if (sim && +this.udpPort.value !== 14555) { this.udpPort.value = 14555; this.udpHost.value = '127.0.0.1'; }
+    fill(this.simHost, sim ? [this.simPanel] : []);
+    fill(this.modeHelp, sim ? [] : [hint(h('span', {}, 'Plug in the GCS radio. On each Pi open the onboard GUI, connect its FC and GCS radio, and read its ', h('b', {}, 'pairing token'), '.'))]);
     this.simChecked = 0; this.update(store);
-    if (!silent) toast(sim ? 'Simulation mode' : 'Field mode', sim ? 'Link over local UDP.' : 'Link over the serial telemetry radio.');
+    if (sim) { watchSim(); if (!silent) refreshSim().then(async () => {
+      const c = sim.status?.components || {}, state = sim.status?.state;
+      if (!c.px4 && state !== 'starting' && state !== 'stopping') { if (await this.startSim(true)) this.overlay.open(true); }
+      else this.overlay.open();
+    }); }
+    if (!silent) toast(sim ? 'Simulation mode' : 'Field mode', sim ? 'Simulated drones on this laptop.' : 'Link over the serial telemetry radio.');
   },
   async connect() {
     const b = this.connectBtn; b.classList.add('busy');
@@ -103,13 +269,14 @@ export const page = {
   refreshSim() {
     // Simulated aircraft are added exactly like real ones (ID, system ID, pairing token): the GCS
     // never reads the onboard computer's files, so the same steps work with a Pi over the radio.
-    if (store.mode !== 'sim') { fill(this.simBox, []); this.simKey = null; return; }
-    if (this.simKey === 'hint') return; this.simKey = 'hint';
-    fill(this.simBox, [h('div', { class: 'row', style: { marginBottom: '8px', flexWrap: 'wrap' } }, h('span', { class: 'kicker' }, 'SITL'),
-      h('span', { class: 'faint' }, 'Add each simulated drone below with its ID, system ID and token — print them with ',
-        h('b', { class: 'mono' }, 'launch/sim.sh pairing'), ' on the simulation computer.'))]);
+    fill(this.simBox, []); this.simKey = null;
   },
   update(s) {
+    // Follow the GCS server's mode (set by the last click in any GCS window, or start_field.sh).
+    // A server that has no mode yet takes this page's saved one.
+    const serverMode = s.state?.link_mode;
+    if (s.stateOk && serverMode === undefined && !this.modeClaimed) { this.modeClaimed = true; api('/api/fleet/use', { mode: store.mode }).catch(() => {}); }
+    else if (serverMode && serverMode !== store.mode && this.root) { this.setMode(serverMode, true); return; }
     const st = s.state || {}, t = st.traffic || {}, conn = st.connection || {}, up = linkUp(), drones = s.fleet;
     // Radio capacity: 10 bits per byte on a UART; UDP has none worth showing.
     const capacity = conn.type === 'serial' && conn.baud ? conn.baud / 10 / 1024 : null;
@@ -152,7 +319,10 @@ export const page = {
     for (const id of [...this.rows.keys()]) if (!drones.some(d => d.drone_id === id)) this.rows.delete(id);
     if (!this.tableEl) { this.tbody = h('tbody'); this.tableEl = h('table', { class: 'table' }, h('thead', {}, h('tr', {}, ...['Aircraft', 'SYS', 'Onboard', 'Core', 'PX4', 'Age', ''].map(x => h('th', {}, x)))), this.tbody); }
     fill(this.tbody, rows);
-    fill(this.table, [drones.length ? this.tableEl : (this.noneEl ||= h('p', { class: 'muted', style: { margin: '4px 0' } }, 'No aircraft yet — add simulated aircraft above, or one with its pairing token below.'))]);
+    const none = store.mode === 'sim' ? 'The simulated drones appear here by themselves once the simulation is ready.' : 'No aircraft yet — add one with its pairing token below.';
+    if (!this.noneEl) this.noneEl = h('p', { class: 'muted', style: { margin: '4px 0' } });
+    this.noneEl.textContent = none;
+    fill(this.table, [drones.length ? this.tableEl : this.noneEl]);
     this.refreshSim();
     // architecture panel for the selected aircraft
     if (!drones.some(d => d.drone_id === this.archSel)) this.archSel = drones[0]?.drone_id;

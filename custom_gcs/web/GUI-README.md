@@ -163,3 +163,20 @@ Verified using an isolated simulated endpoint: positive/zero traffic, service lo
 The optional display contract is `drone.data.gps = {latitude, longitude, age_s, fix_type, heading_deg?, altitude_m?}`. Coordinates must be finite degrees within WGS84 ranges, `age_s` between 0 and 2.5, `fix_type >= 2`, `valid !== false`, and the aircraft must be fresh and CONNECTED. Local telemetry accepts `state.gps` with the same fields, or the existing latitude/longitude plus explicit `gps_age_s` and `gps_fix_type`. These are display inputs only, not a new endpoint or a command interface.
 
 Verified using isolated simulated endpoints: no markers without GPS, three independently positioned aircraft, coordinate movement, heading changes, exact coordinate popup, stale-aircraft removal, and manual camera control. GPS validation checks cover stale/missing/invalid fixes and rejection of initialized home coordinates. Hardware GPS tracking has not been tested and is unavailable with the current fleet status shape.
+
+## Appearance (2026-10-30)
+
+Palette button (top bar, right) opens **Appearance** (`ui/js/appearance.js`, styles at the end of
+`ui/css/gcs.css`). Saved per browser in `localStorage['as2gcs.appearance']` = `{mode, accent}`;
+`index.html` applies it before first paint.
+- **Mode:** Light, Dark (standard slate-navy `--bg #0f1729`, tinted see-through glass; a first grey version `#1b1f28` was rejected as flat), Midnight (the original deep navy
+  dark), System (follows the OS). `data-theme` stays `light`/`dark`; Midnight adds
+  `data-shade=midnight`, so every existing dark rule applies to both dark modes.
+- **Themes:** 12 ready-made mode + accent pairs (AERIXIS, AERIXIS Dark, Midnight, Sky, Ocean, Forest,
+  Sunset, Rose, Glow, Graphite, Gold, Ruby).
+- **Accent:** Multicolour (each page/card its own colour, the original look) or one colour
+  (`data-accent=single`, `--theme-accent`): pages, nav, cards, top bar, background glows and a
+  sidebar tint follow it; text on the accent turns dark on light colours (`--on-accent`).
+  State colours (ok / warn / bad) never change.
+- An older saved `theme: "dark"` opens in the new standard Dark.
+Backups of the changed files: `*.before_themes_20261030`.

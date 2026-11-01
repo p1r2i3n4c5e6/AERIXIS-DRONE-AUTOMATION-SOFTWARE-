@@ -4,3 +4,5 @@ build/
 *.egg-info/
 config/fleet.json
 *.before_phase*
+config/fleet_sim.json*
+config/simulation.json

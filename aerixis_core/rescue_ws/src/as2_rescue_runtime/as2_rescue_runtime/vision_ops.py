@@ -14,6 +14,10 @@ measured gimbal attitude and move the aircraft:
   SetSearchArea     only people inside the KML area count as detections (1-4)
   ScanArea          hold a station inside the area and sweep yaw slowly (mission 2 watch); in a
                     fleet, move the watch away from a peer's orbit (see watch.py)
+  AcquireTarget     delivery drone, on the ground: claim the nearest geotagged person nobody has
+                    claimed (geotags of the search drones, heard over the mesh) (mission 7)
+  FlyToTarget       fly over the claimed person at mission height (7)
+  DropAtTarget      one-shot release over the claimed person through the PX4 AUX adapter (7)
 
 Fleet de-confliction: binding a person puts a claim on them (label, start time, estimated
 plan-frame x,y), which swarm_agent repeats in this drone's mesh peer frames until the claim is
@@ -202,8 +206,19 @@ def geodetic_offset(latitude, longitude, east, north):
 
 
 VISION_OPS = ('TrackTarget', 'ApproachOverhead', 'OrbitTarget', 'GeotagOverhead', 'DropPayload',
-              'ReleaseTargetLock', 'SetGimbalSearch', 'ReturnToLaunch', 'SetSearchArea', 'ScanArea')
+              'ReleaseTargetLock', 'SetGimbalSearch', 'ReturnToLaunch', 'SetSearchArea', 'ScanArea',
+              'AcquireTarget', 'FlyToTarget', 'DropAtTarget')
+# Delivery (mission 7, 2026-11-01): a claim must stand this long unchallenged before the delivery
+# drone commits (a simultaneous claim by the other delivery drone is settled by claim_wins first),
+# and the drop happens only this close over the geotag and this steady.
+TARGET_SETTLE_S = 3.0
+TARGET_ARRIVED_M = 0.6
+DROP_POSITION_M = 1.0
+DROP_SPEED_MPS = 0.4
 FLIGHT_RECOVERY_OPS = ('ReturnToLaunch', 'ManagedLand')
+# ReturnToLaunch of an armed drone this low above home and this close to it: nothing to fly.
+ON_GROUND_AT_HOME_M = 1.0
+AT_HOME_RADIUS_M = 3.0
 # Running while the drone searches: a locked person who is excluded is released even then.
 SEARCH_OPS = ('ScanArea', 'SurveyWaypoint', 'ResumeCoverage')
 # Two claims started this close in time (about one LoRa peer-frame period plus clock skew)
@@ -258,7 +273,7 @@ def claim_wins(peer, mine, me):
         return False
     return str(peer['owner']) < str(me)
 LONG_OPS = ('SurveyWaypoint', 'ResumeCoverage', 'ReturnToLaunch', 'TrackTarget', 'OrbitTarget',
-            'ApproachOverhead', 'ScanArea')
+            'ApproachOverhead', 'ScanArea', 'AcquireTarget', 'FlyToTarget')
 
 
 class VisionOps:
@@ -272,6 +287,14 @@ class VisionOps:
         self.exclusion_radius_m = 6.0
         self.release_cooldown = 0.0
         self.search_pitch = -45.0
+        # Nadir search sweep and lane gating (runtime_node parameters; see lane_gate, sweep).
+        self.sweep_deg = 30.0
+        self.sweep_period_s = 8.0
+        self.sweep_t0 = None
+        self.sweep_sent = None      # (time, yaw, pitch) of the last sweep attitude sent
+        self.approach_ahead_m = 3.0
+        self.respond_radius_m = 15.0
+        self.deferred = None        # why the locked person is not a detection yet (rescue/state)
         # Set by SetSearchArea for this mission: people outside it are not detections.
         self.search_area = None
         # A person within this distance of a peer's live claim is the peer's person.
@@ -289,6 +312,10 @@ class VisionOps:
         self.watch = None
         # Person response held for separation: {op, label, since, note} or None (rescue/state.hold).
         self.hold = None
+        # Delivery (mission 7): the claimed target {label, position, since, mission_id} once it has
+        # been served. Still published as this drone's claim (ReturnToLaunch clears the live
+        # claim) so the other delivery drone never serves the same person.
+        self.delivered = None
 
     # Shared evidence ---------------------------------------------------------------------
     @property
@@ -358,9 +385,10 @@ class VisionOps:
 
     def claim_state(self):
         """This drone's claim as published in rescue/state (swarm_agent sends it to peers)."""
-        if not self.claim or self.claim['mission_id'] != self.engine.owner:
+        live = self.claim or self.delivered
+        if not live or live['mission_id'] != self.engine.owner:
             return None
-        claim = dict(self.claim)
+        claim = dict(live)
         if claim['position'] is not None:
             claim['position'] = [round(v, 1) for v in claim['position']]
         return claim
@@ -394,6 +422,40 @@ class VisionOps:
     def look_away(self, suppress_s=3.0):
         self.engine.driver.vision_command(dict(cmd='release', suppress_s=suppress_s))
         self.engine.driver.vision_command(dict(cmd='set_attitude', yaw=0.0, pitch=self.search_pitch))
+        self.sweep_sent = None
+
+    def sweeping(self):
+        """Nadir search with a side sweep configured (SetGimbalSearch pitch -80 .. -90)."""
+        return self.search_pitch <= -80.0 and self.sweep_deg > 0.0
+
+    def sweep_attitude(self, now):
+        """(gimbal yaw, pitch) of the side sweep at this time: the camera looks straight down and
+        swings sideways across the lane, to the right (yaw +90) then to the left (yaw -90), by up
+        to sweep_deg from vertical. The yaw flips sides while the camera looks straight down,
+        where turning it only rotates the picture."""
+        if self.sweep_t0 is None:
+            self.sweep_t0 = now
+        side = self.sweep_deg * math.sin(2.0 * math.pi * (now - self.sweep_t0) / self.sweep_period_s)
+        if abs(side) < 2.0:
+            return 0.0, -90.0
+        return (90.0 if side > 0 else -90.0), -(90.0 - abs(side))
+
+    def sweep(self, now):
+        """Drive the side sweep while searching with nobody locked (SET_ATTITUDE, which both the
+        simulated and the real A8 tracker follow only while no person is selected)."""
+        active = self.engine.active
+        if not self.sweeping() or active is None or active['operation'] not in SEARCH_OPS:
+            return
+        if locked(self.vision()):
+            return
+        yaw, pitch = self.sweep_attitude(now)
+        last = self.sweep_sent
+        # At most 4 commands/s, and none while the attitude has not moved (a resend every 2 s).
+        if last and (now - last[0] < 0.25 or
+                     (abs(last[1] - yaw) < 1.0 and abs(last[2] - pitch) < 2.0 and now - last[0] < 2.0)):
+            return
+        self.engine.driver.vision_command(dict(cmd='set_attitude', yaw=yaw, pitch=pitch))
+        self.sweep_sent = (now, yaw, pitch)
 
     def reacquire(self, cmd, flags, now):
         """After giving a person way: move clear of them, sweep yaw and take the next person that
@@ -464,13 +526,55 @@ class VisionOps:
             return False
         if self.search_area is not None and self.outside(estimate[0]):
             return False
+        self.deferred = self.lane_gate(vehicle, estimate)
+        if self.deferred:
+            return False
         self.detected = (vision['label'], self.engine.clock())
         return True
+
+    def lane_gate(self, vehicle, estimate):
+        """Why a locked person is not a detection yet during lane coverage, or None (2026-11-01).
+
+        Coverage (from the first survey leg until the lanes end, gaps between legs included):
+        - not on the transit from take-off to the first lane (nothing is surveyed there; the
+          lanes reach every person in the area);
+        - not a person farther than respond_radius_m from the aircraft: the lane passing them
+          later is the short way (SITL: a person locked on the transit and still followed by the
+          gimbal 53 m away drew a diagonal flight as soon as the first leg ended);
+        - on a lane, not while the person is more than approach_ahead_m ahead along it: the lane
+          brings the aircraft abeam, so the response is a short move to the side, and coverage
+          rejoins the lane right there (Engine.resume_ahead).
+        Watch, track and orbit operations are not gated."""
+        engine = self.engine
+        op = (engine.active or {}).get('operation')
+        leg = getattr(engine, 'leg', None)
+        coverage = leg is not None or getattr(engine, 'last_goal', None) is not None
+        if not coverage or op not in (None, 'SurveyWaypoint', 'ResumeCoverage'):
+            return None
+        if op == 'SurveyWaypoint' and getattr(engine, 'leg_is_entry', False):
+            return 'on the way to the first lane'
+        if estimate is None or not vehicle:
+            return 'position of the person not estimated yet'
+        person, here = estimate[0], vehicle['position']
+        distance = math.hypot(person[0] - here[0], person[1] - here[1])
+        if distance > self.respond_radius_m:
+            return '%.0f m from the aircraft' % distance
+        if op != 'SurveyWaypoint' or leg is None:
+            return None
+        (ax, ay, _), (bx, by, _) = leg
+        length = math.hypot(bx - ax, by - ay)
+        if length < 1.0:
+            return None
+        ahead = (person[0] - here[0]) * (bx - ax) / length + (person[1] - here[1]) * (by - ay) / length
+        if ahead > self.approach_ahead_m:
+            return '%.0f m ahead on the lane' % ahead
+        return None
 
     def housekeeping(self, now):
         """De-conflict with peers, and release a lock on a person who is already geotagged or
         claimed by a peer so the search continues."""
         self.deconflict(now)
+        self.sweep(now)
         active = self.engine.active
         if (active is not None and active['operation'] not in SEARCH_OPS) or now < self.release_cooldown:
             return
@@ -483,6 +587,13 @@ class VisionOps:
         if self.detected and self.detected[0] == vision['label'] and now - self.detected[1] < DETECTION_HOLD_S:
             return  # just accepted: the response is about to bind this person
         estimate = self.estimate(vehicle, vision, centred=True)
+        gate = self.lane_gate(vehicle, estimate) if estimate else None
+        if gate and 'ahead on the lane' not in gate:
+            # Seen on the way to the first lane, or far from the aircraft: let go, so the camera
+            # sweeps again and the lane picks this person up when it passes them.
+            self.look_away()
+            self.release_cooldown = now + 4.0
+            return
         if vision['label'] in self.engine.handled_labels or (estimate and (
                 self.excluded(estimate[0]) or self.outside(estimate[0]) or self.peer_claim_at(estimate[0]))):
             # Drop it and look away: otherwise the gimbal keeps staring at the same person and
@@ -796,6 +907,155 @@ class VisionOps:
                 return engine.finish('SUCCESS', 'COMMAND_SENT_UNVERIFIED: servo commanded, delivery not sensed')
         return None
 
+    # Delivery (mission 7) -------------------------------------------------------------------
+    def target_candidates(self):
+        """Geotagged people (the search drones', heard over the mesh, and this drone's own) that
+        no other drone has claimed or served, as plan-frame [x, y]."""
+        points = [t['xy'][:2] for t in self.peer_tags()] + [g['local'][:2] for g in self.engine.geotags()]
+        out = []
+        for point in points:
+            if any(math.hypot(point[0] - p[0], point[1] - p[1]) < 1.0 for p in out):
+                continue
+            if self.peer_claim_at(point) is not None:
+                continue  # a peer is serving (or has served) this person
+            out.append([float(point[0]), float(point[1])])
+        return out
+
+    def target_claim(self):
+        """This drone's live delivery claim, or None (lost to a peer, or not made)."""
+        claim = self.claim
+        return claim if claim and str(claim.get('label', '')).startswith('T') else None
+
+    def op_AcquireTarget(self, cmd, flags, now):
+        """Wait (on the ground) for a geotagged person nobody serves, claim the nearest one and
+        keep the claim TARGET_SETTLE_S unchallenged. Two delivery drones claiming the same person
+        at once: claim_wins keeps it for one of them (deconflict releases the other's claim),
+        and the other one takes the next person."""
+        claim = self.target_claim()
+        if claim and cmd.get('label') == claim['label']:
+            if now - cmd['claimed_at'] >= TARGET_SETTLE_S:
+                self.engine.target = claim['label']
+                return self.engine.finish('SUCCESS', 'Delivery target %s at %.1f,%.1f' % (
+                    claim['label'], claim['position'][0], claim['position'][1]))
+            return None
+        if cmd.get('label'):
+            cmd['given_way'] = cmd.get('given_way', 0) + 1   # lost to a peer: pick the next one
+            cmd.pop('label', None)
+        vehicle = self.ev.get('vehicle', self.engine.safety.limits.ground_vehicle_max_age_s)
+        if not vehicle or not vehicle.get('position_valid'):
+            return None
+        here = vehicle['position']
+        candidates = self.target_candidates()
+        self.watch = dict(state='waiting', note='%d geotagged people unserved' % len(candidates),
+                          station=[round(v, 1) for v in here[:2]], planned=None, stamp=now)
+        if not candidates:
+            return None   # keep waiting; the operation deadline bounds the wait
+        point = min(candidates, key=lambda p: math.hypot(p[0] - here[0], p[1] - here[1]))
+        label = 'T%d_%d' % (round(point[0]), round(point[1]))
+        self.claim = dict(label=label, position=list(point), since=self.engine.clock(),
+                          mission_id=self.engine.owner, radius_m=0.0)
+        self.yielded = None
+        cmd['label'], cmd['claimed_at'] = label, now
+        return None
+
+    def op_FlyToTarget(self, cmd, flags, now):
+        claim = self.target_claim()
+        if claim is None or claim['label'] != self.engine.target:
+            self.engine.driver.stop()
+            raise ValueError('TARGET_TAKEN: the delivery target is served by another drone')
+        if self.start_motion(cmd, flags) is False:
+            return None
+        if not flags['VehicleHealthy']:
+            raise ValueError('Vehicle readiness lost')
+        if self.separation_hold(cmd, flags, now):
+            return None
+        vehicle = self.vehicle()
+        here, target = vehicle['position'], claim['position']
+        distance = math.hypot(target[0] - here[0], target[1] - here[1])
+        vz = hold_altitude(here[2], cmd['z_ref'])
+        if distance <= TARGET_ARRIVED_M and vehicle['speed'] <= 0.35:
+            cmd.setdefault('arrived_since', now)
+            self.engine.driver.velocity([0.0, 0.0, vz], vehicle['yaw'], vehicle['frame_id'])
+            if now - cmd['arrived_since'] >= 1.5:
+                self.engine.driver.stop()
+                return self.engine.finish('SUCCESS', 'Over delivery target %s' % claim['label'])
+            return None
+        cmd.pop('arrived_since', None)
+        vx, vy = approach_velocity(here, target, min(float(cmd.get('speed') or 1.0), 3.0))
+        yaw = math.atan2(target[1] - here[1], target[0] - here[0]) if distance > 2.0 else vehicle['yaw']
+        self.engine.driver.velocity([vx, vy, vz], limit_yaw(vehicle['yaw'], yaw), vehicle['frame_id'])
+        return None
+
+    def over_target(self):
+        """Steady over the claimed delivery target (DropAtTarget's release authority)."""
+        claim = self.target_claim()
+        vehicle = self.ev.get('vehicle')
+        if claim is None or not vehicle or not vehicle.get('position_valid'):
+            return False
+        here, target = vehicle['position'], claim['position']
+        return math.hypot(target[0] - here[0], target[1] - here[1]) <= DROP_POSITION_M and \
+            vehicle.get('speed', 1.0) <= DROP_SPEED_MPS
+
+    def op_DropAtTarget(self, cmd, flags, now):
+        """One release over the claimed person (no camera lock needed: the position comes from
+        the search drone's geotag). Same one-shot journal and adapter as DropPayload."""
+        engine = self.engine
+        limits = engine.safety.limits
+        claim = self.target_claim()
+        if not cmd['started']:
+            if not limits.overhead_envelope_verified:
+                raise ValueError('Overhead drop envelope not verified in the aircraft profile')
+            if claim is None or claim['label'] != engine.target:
+                raise ValueError('TARGET_TAKEN: the delivery target is served by another drone')
+            vehicle = self.vehicle()
+            agl = vehicle['position'][2] - self.ground_z()
+            if not limits.min_overhead_agl_m <= agl <= limits.max_overhead_agl_m:
+                raise ValueError('Drop height %.1f m outside %.1f..%.1f m' % (agl, limits.min_overhead_agl_m, limits.max_overhead_agl_m))
+            if not self.over_target() or not flags['VehicleHealthy']:
+                raise ValueError('Not steady over the delivery target')
+            if not flags['PayloadAvailable']:
+                raise ValueError('No confirmed loaded payload')
+            payload_id = str((self.ev.get('payload') or {}).get('payload_id') or '')
+            transaction = engine.owner + ':' + engine.target + ':' + payload_id
+            engine.journal.mark_flight_authority(engine.owner)
+            fresh, prior = engine.journal.reserve_release(engine.owner, engine.target, payload_id, transaction)
+            engine.last_release = transaction
+            cmd['started'] = True
+            if not fresh:
+                return engine.finish('SUCCESS' if prior['state'] == 'CONFIRMED' else 'FAILURE',
+                                     'Existing payload transaction; never re-actuated')
+            # One beat later, as DropPayload: the adapter must first see OverheadDropReady.
+            cmd['release_at'] = now + 0.15
+            cmd['payload_id'] = payload_id
+            return None
+        vehicle = self.vehicle()
+        if claim is not None:  # keep station over the target while the release goes out
+            vx, vy = approach_velocity(vehicle['position'], claim['position'], 0.3)
+            self.engine.driver.velocity([vx, vy, 0.0], vehicle['yaw'], vehicle['frame_id'])
+        if 'release_at' in cmd:
+            if now < cmd['release_at']:
+                return None
+            if not self.over_target():
+                raise ValueError('Drifted off the delivery target before release; nothing was actuated')
+            self.engine.driver.release(engine.last_release, cmd.pop('payload_id'))
+            del cmd['release_at']
+        payload = self.ev.get('payload') or {}
+        if payload.get('transaction_id') == engine.last_release:
+            done = None
+            if payload.get('released') is True:
+                engine.journal.release_result(engine.last_release, True)
+                done = 'Physical release confirmed'
+            elif payload.get('operator_only') is True and payload.get('command_sent') is True:
+                engine.journal.release_result(engine.last_release, False)
+                done = 'COMMAND_SENT_UNVERIFIED: servo commanded, delivery not sensed'
+            if done:
+                self.delivered = dict(claim or {}, mission_id=engine.owner)
+                self.engine.driver.stop()
+                self.engine.driver.report(dict(kind='delivery', mission_id=engine.owner, target_id=engine.target,
+                                               position=[round(v, 2) for v in (claim or {}).get('position', [])]))
+                return engine.finish('SUCCESS', done)
+        return None
+
     def op_ReleaseTargetLock(self, cmd, flags, now):
         label = self.engine.incident_label or (self.vision() or {}).get('label')
         if label:
@@ -1019,6 +1279,15 @@ class VisionOps:
             # 2026-10-23: with AI on, a return started on the ground waited for ever to "arrive".
             engine.driver.stop()
             return engine.finish('SUCCESS', 'Already on the ground (FC disarmed): no return flight')
+        home = engine.home
+        if (not cmd['started'] and home and vehicle and vehicle.get('armed') is True and vehicle.get('speed', 1.0) < 0.5
+                and vehicle['position'][2] - home['position'][2] < ON_GROUND_AT_HOME_M
+                and math.hypot(vehicle['position'][0] - home['position'][0],
+                               vehicle['position'][1] - home['position'][1]) < AT_HOME_RADIUS_M):
+            # Armed but still on the launch spot (take-off aborted, SITL 2026-10-31): there is no
+            # flight home. Failing here skipped the landing step and left the drone armed.
+            engine.driver.stop()
+            return engine.finish('SUCCESS', 'On the ground at launch (take-off aborted): no return flight, landing next')
         if not flags['FlightAvailable']:
             raise ValueError('Position/connection unavailable for return')
         avoidance = engine.avoidance

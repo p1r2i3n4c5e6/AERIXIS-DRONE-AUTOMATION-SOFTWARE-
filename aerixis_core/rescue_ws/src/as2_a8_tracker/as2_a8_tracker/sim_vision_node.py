@@ -10,10 +10,22 @@ Parameters:
   detect_range_m    maximum slant range for a detection
   lose_after_s      >0: a locked person becomes hidden after this many seconds
   hidden_s          how long a lost person stays hidden
+  persons_frame     'earth' (default): persons are in AS2's earth frame. 'arena': persons are in
+                    the Gazebo arena frame (ENU metres from the arena centre) and spawn_xy is this
+                    drone's take-off spot there; on the first pose (on the ground) the node measures
+                    earth - arena and converts the persons once. The earth frame's origin is chosen
+                    by the estimator (a few metres from the arena centre in SITL, 2026-10-31), so a
+                    fixed shift by the spawn point put drone1's people 10 m off.
+  spawn_xy          "x,y" take-off spot in the arena frame (persons_frame 'arena')
+  gz_world, gz_model  Gazebo world and model of this drone (rescue arena): the camera geometry then
+                    uses the drone's TRUE pose from Gazebo with the arena-frame persons, as a real
+                    camera sees the true world; the rescue stack keeps its own estimate (its heading
+                    was 6-7 deg off in SITL, 2026-10-31). Falls back to the estimated pose without it.
 """
 import json
 import math
 import random
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -39,13 +51,27 @@ class SimVision(Node):
         for name, value in [('persons', '20.0,15.0'), ('detect_range_m', 60.0),
                             ('slew_dps', 90.0), ('hold_seconds', 1.5), ('lose_after_s', 0.0),
                             ('hidden_s', 30.0), ('rate_hz', 20.0), ('start_pitch_deg', 0.0),
-                            ('noise', 0.01), ('ground_z', 0.0)]:
+                            ('noise', 0.01), ('ground_z', 0.0), ('persons_frame', 'earth'), ('spawn_xy', '0,0'),
+                            ('gz_world', ''), ('gz_model', '')]:
             self.declare_parameter(name, value)
         self.people = parse_persons(self.get_parameter('persons').value)
         ground = float(self.get_parameter('ground_z').value)
         for person in self.people:
             person[2] = ground
         self.hidden_until = [0.0] * len(self.people)
+        self.arena_frame = str(self.get_parameter('persons_frame').value) == 'arena'
+        self.spawn = [float(v) for v in str(self.get_parameter('spawn_xy').value).split(',')[:2]]
+        self.calibrated = not self.arena_frame
+        self.arena_people = [list(p) for p in self.people]   # as given (arena frame)
+        self.offset = None                                   # earth - arena, measured on the ground
+        self.frozen = not self.arena_frame
+        self.truth = None            # ([x, y, z], yaw, monotonic time) from Gazebo, arena frame
+        self.active_people = self.people
+        self.aircraft = None
+        self.gz = None
+        world, model = str(self.get_parameter('gz_world').value), str(self.get_parameter('gz_model').value)
+        if world and model and self.arena_frame:
+            self.start_truth(world, model)
         self.yaw, self.pitch = 0.0, float(self.get_parameter('start_pitch_deg').value)
         self.goal = (self.yaw, self.pitch)
         self.pose = None
@@ -67,6 +93,35 @@ class SimVision(Node):
         self.create_timer(self.period, self.tick)
         self.get_logger().info('Simulated A8 with %d person(s): %s' % (len(self.people), self.people))
 
+    def start_truth(self, world, model):
+        try:
+            from gz.msgs10.pose_v_pb2 import Pose_V
+            from gz.transport13 import Node as GzNode
+        except ImportError as exc:
+            self.get_logger().warn('Gazebo bindings unavailable (%s): using the estimated pose' % exc)
+            return
+
+        def on_poses(msg):
+            for pose in msg.pose:
+                if pose.name == model:
+                    q, p = pose.orientation, pose.position
+                    yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+                    self.truth = ([p.x, p.y, p.z], yaw, time.monotonic())
+                    return
+        self.gz = GzNode()
+        self.gz.subscribe(Pose_V, '/world/%s/dynamic_pose/info' % world, on_poses)
+        self.get_logger().info('Camera geometry from the true Gazebo pose of %s in %s' % (model, world))
+
+    def view(self):
+        """Aircraft position/yaw and the persons in the same frame: the true Gazebo pose with the
+        arena persons when fresh, else the estimated pose with the converted persons."""
+        truth = self.truth
+        if truth is not None and time.monotonic() - truth[2] < 0.5:
+            return truth[0], truth[1], self.arena_people
+        if self.pose is not None and self.calibrated:
+            return self.pose[0], self.pose[1], self.people
+        return None, None, self.people
+
     def now(self):
         return self.get_clock().now().nanoseconds / 1e9
 
@@ -74,6 +129,25 @@ class SimVision(Node):
         q = msg.pose.orientation
         yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
         p = msg.pose.position
+        if not self.frozen:
+            if abs(p.z) > 1.5:
+                if not self.calibrated:
+                    self.get_logger().warn('Arena persons need a pose on the ground first (z=%.1f m): waiting' % p.z,
+                                           throttle_duration_sec=10.0)
+                    return
+                # First take-off: the drone has left its spawn point, keep the last ground offset.
+                self.frozen = True
+                self.get_logger().info('Arena offset fixed at take-off: (%.2f, %.2f) m' % tuple(self.offset))
+            else:
+                # Still on its spawn point before the first take-off: follow the estimator, whose
+                # local origin can jump while it settles after start-up (SITL 2026-10-31).
+                offset = [p.x - self.spawn[0], p.y - self.spawn[1]]
+                if self.offset is None or math.hypot(offset[0] - self.offset[0], offset[1] - self.offset[1]) > 0.5:
+                    self.get_logger().info('Arena persons in the earth frame: offset (%.2f, %.2f) m' % tuple(offset))
+                self.offset = offset
+                for person, base in zip(self.people, self.arena_people):
+                    person[0], person[1] = base[0] + offset[0], base[1] + offset[1]
+                self.calibrated = True
         self.pose = ([p.x, p.y, p.z], yaw)
 
     def on_command(self, msg):
@@ -105,18 +179,19 @@ class SimVision(Node):
     def visible(self, index, aircraft, yaw):
         if self.now() < self.hidden_until[index]:
             return None
-        _, _, distance = look_angles(aircraft, self.people[index])
+        _, _, distance = look_angles(aircraft, self.active_people[index])
         if distance > self.get_parameter('detect_range_m').value:
             return None
-        return image_error(aircraft, yaw, self.yaw, self.pitch, self.people[index])
+        return image_error(aircraft, yaw, self.yaw, self.pitch, self.active_people[index])
 
     def tick(self):
         now = self.now()
         step = self.get_parameter('slew_dps').value * self.period
         locked = None
         count = 0
-        if self.pose is not None:
-            aircraft, yaw = self.pose
+        aircraft, yaw, self.active_people = self.view()
+        self.aircraft = aircraft
+        if aircraft is not None:
             seen = {i: self.visible(i, aircraft, yaw) for i in range(len(self.people))}
             seen = {i: e for i, e in seen.items() if e is not None}
             count = len(seen)
@@ -133,7 +208,7 @@ class SimVision(Node):
                     self.hidden_until[self.selected] = now + self.get_parameter('hidden_s').value
                 if self.selected in seen and not suppressed:
                     self.unseen_since = None
-                    self.goal = pointing_angles(aircraft, yaw, self.people[self.selected], self.yaw)
+                    self.goal = pointing_angles(aircraft, yaw, self.active_people[self.selected], self.yaw)
                     locked = seen[self.selected]
                 else:
                     self.unseen_since = self.unseen_since or now
@@ -146,7 +221,7 @@ class SimVision(Node):
         dist = None
         if locked is not None:
             err = [locked[0] + random.gauss(0, noise), locked[1] + random.gauss(0, noise)]
-            dist = round(look_angles(self.pose[0], self.people[self.selected])[2], 2)
+            dist = round(look_angles(self.aircraft, self.active_people[self.selected])[2], 2)
         gimbal = dict(yaw=self.yaw, pitch=self.pitch, roll=0.0, yaw_rate=0.0, pitch_rate=0.0,
                       roll_rate=0.0, age_s=0.0)
         target = target_message(now, fresh=True, locked=locked is not None, label=self.label,

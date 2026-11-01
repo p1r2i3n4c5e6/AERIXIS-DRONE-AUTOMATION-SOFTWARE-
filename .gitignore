@@ -10,6 +10,8 @@ node_modules/
 
 # Local secrets and settings: never commit
 custom_gcs/config/fleet.json*
+custom_gcs/config/fleet_sim.json*
+custom_gcs/config/simulation.json
 custom_gcs/config/missions/
 **/onboard.env
 *.token

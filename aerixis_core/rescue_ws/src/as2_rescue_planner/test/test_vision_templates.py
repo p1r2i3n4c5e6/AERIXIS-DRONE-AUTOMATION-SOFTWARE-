@@ -177,3 +177,27 @@ def test_route_bundle_refuses_a_tampered_watch_station():
         copy['bundle_sha256'] = body_checksum({k: v for k, v in copy.items() if k != 'bundle_sha256'})
         with pytest.raises(ValueError):
             validate_route_bundle(copy, 'drone1', tampered)
+
+
+# The onboard runtime refuses an operation whose timeout_s exceeds its limit (engine.submit):
+# 1800 s for these long operations, 300 s for every other one. A 600 s ManagedLand was refused
+# in flight ("Invalid operation timeout") and the drone hovered instead of landing (SITL
+# 2026-11-01). Keep this list equal to as2_rescue_runtime/vision_ops.py LONG_OPS.
+RUNTIME_LONG_OPS = ('SurveyWaypoint', 'ResumeCoverage', 'ReturnToLaunch', 'TrackTarget', 'OrbitTarget',
+                    'ApproachOverhead', 'ScanArea', 'AcquireTarget', 'FlyToTarget')
+
+
+def test_every_operation_timeout_is_accepted_by_the_onboard_runtime():
+    from as2_rescue_planner.features import BUILTIN_FEATURES, custom_mission
+    trees = [vision_mission(mode, POINTS, 'group', fleet_size=n) for mode in VISION_MODES for n in (1, 2)]
+    trees += [custom_mission(spec, POINTS, 'group') for spec in BUILTIN_FEATURES.values()]
+    from as2_rescue_planner.trees import delivery_mission
+    trees += [delivery_mission(15, 'group', fleet_size=n) for n in (1, 4)]
+    checked = 0
+    for tree in trees:
+        for e in ET.fromstring(xml(tree)).iter():
+            if 'timeout_s' in e.attrib:
+                limit = 1800 if e.tag in RUNTIME_LONG_OPS else 300
+                assert 0 < float(e.attrib['timeout_s']) <= limit, (e.tag, e.attrib['timeout_s'])
+                checked += 1
+    assert checked > 50

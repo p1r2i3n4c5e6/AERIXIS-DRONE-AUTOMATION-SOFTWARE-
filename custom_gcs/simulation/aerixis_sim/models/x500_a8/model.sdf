@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sdf version='1.9'>
+  <!-- AERIXIS simulation drone: PX4's x500 with the A8-like gimbal camera (gimbal_a8).
+       PX4 flies it as a plain x500 (airframe 4001); the gimbal is pointed by the AERIXIS sim camera
+       bridge to match the simulated tracker. -->
+  <model name='x500_a8'>
+    <include merge='true'>
+      <uri>model://x500</uri>
+    </include>
+    <include merge='true'>
+      <uri>model://gimbal_a8</uri>
+      <pose>0 0 0.26 0 0 3.14</pose>
+    </include>
+    <joint name="GimbalAttachJoint" type="fixed">
+      <parent>base_link</parent>
+      <child>cgo3_mount_link</child>
+    </joint>
+  </model>
+</sdf>

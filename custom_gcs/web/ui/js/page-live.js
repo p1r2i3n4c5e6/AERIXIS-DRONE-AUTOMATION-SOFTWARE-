@@ -3,6 +3,7 @@
 // in a drawer under the map.
 import { h, icon, badge, hint, api, store, toast, fill, confirmDialog, emptyState, isFresh, rescueOf, linksOf, stripAnsi, prefs } from './core.js';
 import { createMap, gcsPosition } from './mapview.js';
+import { sim } from './simarena.js';
 import { fromLive, treeViewer, legend } from './tree.js';
 import { droneCard, gnss } from './dronecard.js';
 import { btLogView } from './btlog.js';
@@ -92,6 +93,7 @@ export const page = {
     const points = this.map?.showDrones(drones.map((d, index) => { const r = rescueOf(d) || {};
       return { id: d.drone_id, label: d.label, index, latlon: r.gps ? [r.gps.latitude, r.gps.longitude] : null, yawDeg: (r.vehicle?.yaw || 0) * 180 / Math.PI,
         alt: r.vehicle?.position?.[2], selected: d.drone_id === this.selected, stale: !isFresh(d) }; }), id => this.select(id)) || [];
+    this.map?.showArena(store.mode === 'sim' ? sim.arena : null);
     this.map?.showGeotags(drones.flatMap(d => (rescueOf(d)?.geotags || []).map(t => ({ ...t, drone: d.label }))));
     this.points = points;
     if (flying) this.map?.follow(points);

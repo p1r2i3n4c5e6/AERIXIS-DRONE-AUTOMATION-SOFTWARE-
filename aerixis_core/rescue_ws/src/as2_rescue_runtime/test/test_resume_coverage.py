@@ -1,4 +1,5 @@
-"""ResumeCoverage flies back to the saved resume point and keeps that goal for the whole leg.
+"""ResumeCoverage rejoins the interrupted lane (abeam of the aircraft, never behind the saved
+interruption point) and keeps that goal for the whole leg.
 
 PX4 v1.16 SITL, 2026-10-24: the leg's start re-saved the checkpoint from the aircraft's current
 position, so the next tick asked the route publisher for a different goal ("Approved leg goal
@@ -42,30 +43,46 @@ class ResumeCoverageTests(unittest.TestCase):
         self.assertEqual(self.engine.tick()['status'], 'SUCCESS')
         self.d.idle = True; self.d.result = None
         self.command('SurveyWaypoint', segment_id='lane-2', pose='40;30;10', speed=1.0)
-        self.assertIsNone(self.engine.tick())
+        self.assertIsNone(self.engine.tick())              # route request
+        self.at([40, 0, 10])
+        self.assertIsNone(self.engine.tick())              # approved: the lane leg starts
+        self.assertEqual(self.engine.leg[1], [40.0, 30.0, 10.0])
         self.d.result = 'RUNNING'; self.d.idle = False
 
     def test_interrupted_entry_transit_resumes_at_the_first_lane(self):
         self.start_leg()                                   # launch 0,0 -> first lane start 40,0
         self.assertEqual(self.checkpoint_at([12, 3, 10]), [40.0, 0.0, 10.0])
 
-    def test_resume_goal_stays_the_saved_point(self):
+    def test_resume_rejoins_the_lane_abeam_and_keeps_that_goal(self):
+        # 2026-10-31: coverage rejoins the lane abeam of the aircraft (shortest way), not back at
+        # the interruption point; the goal is chosen once and stays for the whole leg.
         self.finish_first_lane()                           # survey lane 40,0 -> 40,30
         self.assertEqual(self.checkpoint_at([40, 10, 10]), [40.0, 10.0, 10.0])
-        # The aircraft went to a person off the lane, then resumes coverage.
+        # The aircraft went to a person beside the lane (and a little further along), then resumes.
         self.d.idle = True; self.d.result = None; self.d.calls.clear(); self.record_routes()
         self.at([46, 14, 10])
         self.command('ResumeCoverage', speed=1.0)
         self.assertIsNone(self.engine.tick())
-        self.assertEqual(self.moves(), [('move', [40.0, 10.0, 10.0])])
+        self.assertEqual(self.moves(), [('move', [40.0, 14.0, 10.0])])
         self.d.idle = False; self.d.result = 'RUNNING'
-        for position in ([44, 13, 10], [42, 12, 10], [41, 11, 10]):
+        for position in ([44, 14, 10], [42, 14, 10], [41, 14, 10]):
             self.at(position)
             self.assertIsNone(self.engine.tick())
-        self.assertEqual({tuple(round(v, 3) for v in p) for p in self.routes}, {(40.0, 10.0, 10.0)})
+        self.assertEqual({tuple(round(v, 3) for v in p) for p in self.routes}, {(40.0, 14.0, 10.0)})
         self.d.result = 'SUCCESS'
-        self.at([40, 10, 10])
+        self.at([40, 14, 10])
         self.assertEqual(self.engine.tick()['status'], 'SUCCESS')
+
+    def test_resume_never_flies_back_along_the_lane(self):
+        # The person stood beside the lane behind the interruption point: rejoin at the saved
+        # point, never further back.
+        self.finish_first_lane()
+        self.assertEqual(self.checkpoint_at([40, 10, 10]), [40.0, 10.0, 10.0])
+        self.d.idle = True; self.d.result = None; self.d.calls.clear(); self.record_routes()
+        self.at([45, 6, 10])
+        self.command('ResumeCoverage', speed=1.0)
+        self.assertIsNone(self.engine.tick())
+        self.assertEqual(self.moves(), [('move', [40.0, 10.0, 10.0])])
 
 
 if __name__ == '__main__':

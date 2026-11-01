@@ -12,7 +12,8 @@ MODES={'survey':'surveillance','waypoints':'waypoints','search_geotag':'search_g
        'custom':'custom'}
 DEFAULT_TEMPLATE='human_geotag_resume'
 VISION_OPTIONS=('search_pitch_deg','lost_timeout_s','track_duration_s','orbit_radius_m','orbit_laps',
-                'orbit_speed','approach_speed','rtl_speed','suppress_s','mesh_wait_s','search_time_s','scan_rate_dps')
+                'orbit_speed','approach_speed','rtl_speed','suppress_s','mesh_wait_s','search_time_s','scan_rate_dps',
+                'delivery_wait_s','delivery_speed')
 MAX_AREA_VERTICES=40
 
 
@@ -35,7 +36,7 @@ def station_for(region,waypoints):
 def plan_mission(request):
     # Trees are owned by this package (trees.py) so the planner depends on
     # nothing from the runtime, keeping the package graph acyclic.
-    from .trees import mission, vision_mission, VISION_MODES, END_ACTIONS, xml
+    from .trees import mission, vision_mission, delivery_mission, VISION_MODES, END_ACTIONS, xml
     from .features import custom_mission, feature_spec
     document=request.get('kml')
     if not isinstance(document,str) or len(document.encode())>1_000_000:
@@ -50,6 +51,19 @@ def plan_mission(request):
     emergency=request.get('emergency_action') or (spec['emergency'] if spec else 'RTL')
     if emergency not in END_ACTIONS:raise ValueError('Emergency action must be RTL or LAND')
     if spec:spec['emergency']=emergency
+    # Per-drone behaviour (2026-11-01): a fleet entry may carry its own feature spec, e.g. "Search &
+    # orbit" where only the drones the operator chose orbit a person and the others geotag. Only
+    # what the drone does with a person may differ: the mission type (lanes or watch), camera,
+    # payload/drop and the finish/emergency actions stay those of the mission.
+    own_specs={}
+    for entry in request.get('fleet') or []:
+        if isinstance(entry,dict) and entry.get('features') is not None:
+            if not spec:raise ValueError('Per-aircraft features need a custom mission (template "custom")')
+            own=feature_spec(dict(entry['features'],emergency=emergency))
+            for key in ('type','camera','payload','drop','finish','emergency'):
+                if own[key]!=spec[key]:
+                    raise ValueError('%s: per-aircraft features may not change %s'%(entry.get('drone_id'),key))
+            own_specs[entry.get('drone_id')]=own
     watching=mode=='human_orbit' or bool(spec and spec['type']=='watch')
     dropping=mode=='human_geotag_drop_resume' or bool(spec and spec['drop'])
     speed=float(request.get('speed_mps',.5));altitude=float(request.get('altitude_m',0))
@@ -60,7 +74,19 @@ def plan_mission(request):
     if len(areas)!=1:raise ValueError('Select exactly one KML planning area by name')
     region=parsed.region(areas[0]);fleet=request.get('fleet')
     if not isinstance(fleet,list) or not 1<=len(fleet)<=64:raise ValueError('Fleet must contain 1..64 aircraft')
-    plan=coverage.partition_region(region,fleet,float(request.get('spacing_m',10)),
+    # Mission 7 (2026-11-01): fleet entries with role 'delivery' fly no lanes. They wait for the
+    # search drones' geotags (over the mesh), claim one each and drop (trees.delivery_mission).
+    for entry in fleet:
+        if isinstance(entry,dict) and entry.get('role') not in (None,'search','delivery'):
+            raise ValueError('%s: role must be search or delivery'%entry.get('drone_id'))
+    delivery_ids=[e['drone_id'] for e in fleet if isinstance(e,dict) and e.get('role')=='delivery']
+    searchers=[e for e in fleet if not (isinstance(e,dict) and e.get('role')=='delivery')]
+    if delivery_ids:
+        if not spec or not spec['geotag'] or spec['type']!='coverage':
+            raise ValueError('Delivery drones need a coverage mission whose search drones geotag')
+        if not searchers:raise ValueError('Delivery drones need at least one search drone')
+        if any(i in own_specs for i in delivery_ids):raise ValueError('A delivery drone takes no per-aircraft features')
+    plan=coverage.partition_region(region,searchers,float(request.get('spacing_m',10)),
         float(request.get('heading_deg',0)),speed,float(request.get('corridor_m',10)))
     region_data=dict(shell=region.shell,holes=region.holes,exclusions=region.exclusions,name=region.name)
     origin=dict(latitude=parsed.projection.latitude,longitude=parsed.projection.longitude,
@@ -70,7 +96,7 @@ def plan_mission(request):
     if not plan['complete']:reasons.append(plan['reason'])
     if any(not isinstance(a.get('endurance_s'),(int,float)) or a['endurance_s']<=0 for a in fleet):
         reasons.append('All aircraft need a positive measured endurance budget')
-    if len(plan['assignments'])!=len(fleet):reasons.append('Not enough coverage lanes for every selected aircraft')
+    if len(plan['assignments'])!=len(searchers):reasons.append('Not enough coverage lanes for every selected aircraft')
     # Routes drawn in the KML (a LineString named after each aircraft): flown instead of the
     # computed lanes, e.g. to test or fly crossing paths. Every selected aircraft needs one.
     drawn={item['drone_id']:parsed.route(item['drone_id']) for item in built['bundles']}
@@ -98,6 +124,14 @@ def plan_mission(request):
             own=item['drone_id']
             watch_lists[own]=watch.encode(watch.alternates(region,item['coverage']['waypoints'],planned[own]),
                 {d:p for d,p in planned.items() if d!=own})
+    for drone_id in delivery_ids:
+        # Delivery drone: an empty route (no lanes) in the same bundle format and manifest.
+        body={'schema_version':bundle.BUNDLE_SCHEMA,'mission_id':identity,'revision':revision,'drone_id':drone_id,
+            'assignment':{'lane_count':0,'distance_m':0.0,'estimated_duration_s':0.0,'lane_range':[0,-1],'pattern':'delivery'},
+            'coverage':{'frame_id':'earth','altitude_m':float(altitude),'altitude_verified':False,'waypoints':[]},
+            'capabilities':{'coverage':False,'detection':False,'payload':True},
+            'plan_sha256':built['manifest']['plan_sha256']}
+        built['bundles'].append(body)
     for item in built['bundles']:
         if watching:
             # Mission 2 does not survey: each aircraft holds one station in its share of the
@@ -107,6 +141,14 @@ def plan_mission(request):
                 pose=[round(float(station[0]),3),round(float(station[1]),3),float(altitude)])]
             item['assignment']=dict(item['assignment'],pattern='station',distance_m=0.0,
                 estimated_duration_s=float(request.get('search_time_s') or 600))
+        if item['drone_id'] in delivery_ids:
+            options={k:float(request[k]) for k in VISION_OPTIONS if request.get(k) is not None}
+            xmls[item['drone_id']]=xml(delivery_mission(altitude,request.get('swarm_id') or identity,fleet_size=len(fleet),
+                emergency=emergency,finish=spec['finish'],**options))
+            item.update(region=region_data,origin=origin,xml_sha256=hashlib.sha256(xmls[item['drone_id']].encode()).hexdigest(),
+                delivery_policy=dict(drop_mode='overhead',overhead_authorized=True,planned_waypoint=False,target_id='geotag'))
+            item['bundle_sha256']=bundle.body_checksum({k:v for k,v in item.items() if k!='bundle_sha256'})
+            continue
         points=[w['pose'] for w in item['coverage']['waypoints']]
         if any(not region.contains_segment(a[:2],b[:2]) for a,b in zip(points,points[1:])):
             reasons.append(item['drone_id']+': a transit crosses an excluded/outside area; change partition or provide a safe corridor')
@@ -120,7 +162,7 @@ def plan_mission(request):
                     options[key]=value
             common=dict(segment_ids=segments,speed=speed,fleet_size=len(fleet),area=search_area(region.shell),
                 stations=watch_lists.get(item['drone_id']),**options)
-            if spec:tree=custom_mission(spec,points,request.get('swarm_id') or identity,**common)
+            if spec:tree=custom_mission(own_specs.get(item['drone_id'],spec),points,request.get('swarm_id') or identity,**common)
             else:tree=vision_mission(mode,points,request.get('swarm_id') or identity,emergency=emergency,**common)
         else:
             tree=mission(MODES[mode],points,request.get('swarm_id') or identity,
@@ -141,6 +183,7 @@ def plan_mission(request):
         altitude=kml.altitude_semantics(areas[0]),origin=origin,region=region_data,
         plan=plan,manifest=built['manifest'],bundles=built['bundles'],xml=xmls,
         complete=not reasons,reason='; '.join(reasons),features=spec,emergency_action=emergency,
+        aircraft_features=own_specs or None,delivery=delivery_ids or None,
         routes='kml' if use_routes else None,
         stations={b['drone_id']:b['coverage']['waypoints'][0]['pose'] for b in built['bundles']} if watching else None)
     result['manifest']['artifacts']=[dict(drone_id=b['drone_id'],bundle_sha256=b['bundle_sha256'],xml_sha256=b['xml_sha256']) for b in built['bundles']]

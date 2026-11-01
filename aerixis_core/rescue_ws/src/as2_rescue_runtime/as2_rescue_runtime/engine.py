@@ -81,8 +81,12 @@ class Engine:
         flags.update(VisionHealthy=bool(vision and vision.get('fresh')),TargetLocked=locked(vision),
             HumanDetected=self.vision.human_detected(),OverheadTarget=overhead(vision),PayloadAvailable=loaded,
             FlightAvailable=bool(vehicle and vehicle.get('position_valid') is True and vehicle.get('connected') is True),
-            OverheadDropReady=bool(self.active and self.active['operation']=='DropPayload' and overhead(vision)
-                and self.safety.limits.overhead_envelope_verified))
+            # The one release authority the payload adapter accepts besides the delivery zone: an
+            # overhead drop at nadir over a geotagged person (DropPayload), or over the claimed
+            # delivery target steady at its geotag (DropAtTarget, mission 7).
+            OverheadDropReady=bool(self.active and self.safety.limits.overhead_envelope_verified and (
+                (self.active['operation']=='DropPayload' and overhead(vision)) or
+                (self.active['operation']=='DropAtTarget' and self.vision.over_target()))))
         if flags['AbortRequested']:self.aborted=True
         if self.aborted or self.recovery_required:
             flags.update(AbortRequested=True,VehicleHealthy=False,SafeToRelease=False,
@@ -97,9 +101,21 @@ class Engine:
             # the area). A point on the transit line may lie outside the area, and the route
             # check then refuses the resume (PX4 1.16 Gazebo SITL, launch 41 m outside, 2026-10-24).
             return list(leg[1])
-        (ax,ay,_),(bx,by,bz)=leg;dx,dy=bx-ax,by-ay;length=dx*dx+dy*dy
-        t=0.0 if length==0 else max(0.0,min(1.0,((position[0]-ax)*dx+(position[1]-ay)*dy)/length))
-        return [ax+t*dx,ay+t*dy,bz]
+        (ax,ay,_),(bx,by,bz)=leg;t=self.leg_fraction(position)
+        return [ax+t*(bx-ax),ay+t*(by-ay),bz]
+    def leg_fraction(self,position):
+        """How far along the current planned leg a point is, 0 (start) .. 1 (end)."""
+        (ax,ay,_),(bx,by,_)=self.leg;dx,dy=bx-ax,by-ay;length=dx*dx+dy*dy
+        return 0.0 if length==0 else max(0.0,min(1.0,((position[0]-ax)*dx+(position[1]-ay)*dy)/length))
+    def resume_ahead(self,saved,position):
+        """Where ResumeCoverage rejoins the lane (2026-10-31): the point of the interrupted leg
+        abeam of the aircraft now, or the saved interruption point if that is further along.
+        Coverage never flies backwards along the lane to where it left it: the part between
+        was in view while the aircraft went to the person beside the lane."""
+        leg=getattr(self,'leg',None)
+        if not leg or not saved or not position or getattr(self,'leg_is_entry',False):return saved
+        (ax,ay,_),(bx,by,_)=leg;t=max(self.leg_fraction(saved),self.leg_fraction(position))
+        return [ax+t*(bx-ax),ay+t*(by-ay),saved[2]]
     def motion_ready(self):
         return self.driver.idle and getattr(self.driver,'hover_future',None) is None
     def finish(self,status,reason=''):
@@ -262,7 +278,11 @@ class Engine:
                     if op=='ResumeCoverage':
                         saved=self.journal.state['missions'].get(self.owner)
                         if not saved:raise ValueError('No persistent coverage checkpoint')
-                        pose=saved.get('pose')
+                        if 'resume_pose' not in cmd:
+                            # Chosen once: the goal must stay the same for the whole leg (route check).
+                            here=(self.evidence.get('vehicle',self.safety.limits.vehicle_max_age_s) or {}).get('position')
+                            cmd['resume_pose']=self.resume_ahead(saved.get('pose'),here)
+                        pose=cmd['resume_pose']
                     else:
                         segment=cmd.get('segment_id')
                         if not segment:raise ValueError('Route segment ID missing')

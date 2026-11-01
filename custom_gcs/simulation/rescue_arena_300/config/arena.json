@@ -1,0 +1,15 @@
+{
+  "world_name": "rescue_arena_300",
+  "size_m": 300.0,
+  "seed": 20261031,
+  "human_count": 50,
+  "tree_count": 180,
+  "human_min_spacing_m": 20.0,
+  "human_canopy_clearance_m": 4.0,
+  "launch_clearance_radius_m": 18.0,
+  "origin": {
+    "latitude_deg": 47.397971057728974,
+    "longitude_deg": 8.546163739800146,
+    "altitude_m": 488.0
+  }
+}

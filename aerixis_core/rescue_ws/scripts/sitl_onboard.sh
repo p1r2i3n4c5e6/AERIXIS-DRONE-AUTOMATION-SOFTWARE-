@@ -21,8 +21,11 @@ EMERGENCY_ACTION="${EMERGENCY_ACTION:-RTL}"
 # Fleet separation for the gate and AI avoidance: 3 m in SITL (as on RTK drones); SEPARATION=10 for
 # ordinary-GNSS behaviour.
 SEPARATION="${SEPARATION:-3.0}"
+# SIM_INFO=<arena run>/sim_info.json (launch/sim.sh --arena): people from the rescue arena.
 # Same SITL_HOME as ./3_launch_simulation.sh (default: PX4's Zurich home).
 IFS=, read -r HOME_LAT HOME_LON HOME_ALT <<< "${SITL_HOME:-47.397742,8.545594,488.0}"; HOME_ALT="${HOME_ALT:-0}"
+# ROS parameters are typed: "488" would be an integer and the gateway refuses it (arena SITL 2026-10-31).
+read -r HOME_LAT HOME_LON HOME_ALT <<< "$(python3 -c "import sys; print(*(float(v) for v in sys.argv[1:]))" "$HOME_LAT" "$HOME_LON" "$HOME_ALT")"
 if [ -z "${DRONES:-}" ]; then DRONES=$(ls -d /tmp/px4_instance_* 2>/dev/null | wc -l); [ "$DRONES" -ge 1 ] || DRONES=1; fi
 STATE="${AS2_SITL_STATE:-$HOME/.local/share/as2-sitl}"; LOGS="$STATE/logs"
 mkdir -p "$LOGS" "$STATE/missions"; chmod 700 "$STATE/missions"
@@ -32,6 +35,10 @@ source /opt/ros/humble/setup.bash; source "$ROOT/install/setup.bash"; source "$R
 export PYTHONPATH="/usr/lib/python3/dist-packages:${PYTHONPATH:-}"
 PIDS=()
 start() { local name=$1; shift; setsid "$@" > "$LOGS/$name.log" 2>&1 < /dev/null & PIDS+=($!); echo "  started $name (log $LOGS/$name.log)"; }
+# Each drone's own software at lower CPU priority (ONBOARD_NICE, from launch/sim.sh): the
+# simulator (Gazebo, PX4 in lock-step with it), the DDS agent, the FC guardian and the radio hub
+# keep normal priority, so the simulated flight controller never freezes for lack of CPU.
+nstart() { local name=$1; shift; start "$name" nice -n "${ONBOARD_NICE:-0}" "$@"; }
 stop_all() {
   echo; echo "Stopping onboard SITL stack..."
   for pid in "${PIDS[@]}"; do kill -INT -- -"$pid" 2>/dev/null; done; sleep 4
@@ -72,10 +79,18 @@ YAML
     || echo "  WARNING: PX4 offboard-loss failsafe not confirmed for $DRONE"
   start ${DRONE}_guardian ros2 run as2_rescue_runtime fc_guardian --ros-args -r __ns:=/$DRONE -p fmu_prefix:=/$DRONE \
     -p target_system:=$SYSID -p emergency_action:=$EMERGENCY_ACTION
-  start ${DRONE}_onboard ros2 launch as2_rescue_runtime onboard.launch.py drone_id:=$DRONE fmu_prefix:=/$DRONE target_system_id:=$SYSID \
+  nstart ${DRONE}_onboard ros2 launch as2_rescue_runtime onboard.launch.py drone_id:=$DRONE fmu_prefix:=/$DRONE target_system_id:=$SYSID \
     override:="$STATE/${DRONE}_sitl.yaml" fc_mavlink_url:=udpin:0.0.0.0:$((14540+i))
-  start ${DRONE}_sim_vision ros2 run as2_a8_tracker a8_sim_vision --ros-args -r __ns:=/$DRONE -p "persons:=$PERSONS" -p lose_after_s:=$(python3 -c "print(float('$LOSE'))")
-  start ${DRONE}_mission_manager env AS2_MISSION_STATE_ROOT="$STATE/missions" bash "$RESCUE/scripts/start_mission_manager.sh" $DRONE --allow-flight --port $MANAGER_PORT
+  # Rescue arena (SIM_INFO from custom_gcs/simulation/aerixis_sim/prepare_arena.py): the arena's people in
+  # the arena frame plus this drone's take-off spot; the tracker converts them on its first pose.
+  SIM_ARGS=(-p "persons:=$PERSONS")
+  if [ -n "${SIM_INFO:-}" ]; then
+    read -r ARENA_PERSONS SPAWN_XY ARENA_WORLD < <(python3 -c "import json,sys; i=json.load(open(sys.argv[1])); s=i['spawns'][int(sys.argv[2])]; print(i['persons_arena'], f\"{s['x']},{s['y']}\", i['world'])" "$SIM_INFO" "$i")
+    # Camera geometry from the drone's true Gazebo pose (model x500_a8_I), like a real camera.
+    SIM_ARGS=(-p "persons:=$ARENA_PERSONS" -p persons_frame:=arena -p "spawn_xy:=$SPAWN_XY" -p "gz_world:=$ARENA_WORLD" -p "gz_model:=x500_a8_$i")
+  fi
+  nstart ${DRONE}_sim_vision ros2 run as2_a8_tracker a8_sim_vision --ros-args -r __ns:=/$DRONE "${SIM_ARGS[@]}" -p lose_after_s:=$(python3 -c "print(float('$LOSE'))")
+  nstart ${DRONE}_mission_manager env AS2_MISSION_STATE_ROOT="$STATE/missions" bash "$RESCUE/scripts/start_mission_manager.sh" $DRONE --allow-flight --port $MANAGER_PORT
   if [ "$DRONES" -gt 1 ]; then
     BIND=$((14570+i)); GCS_PORT=$GATEWAY_PORT; GATEWAYS+=($BIND)   # 14560 is named in PX4's SITL params
     # Mesh ports below Linux's ephemeral range (32768-60999): at 47800+ a guardian's outgoing UDP
@@ -86,7 +101,7 @@ YAML
   else
     BIND=$GATEWAY_PORT; GCS_PORT=14551
   fi
-  start ${DRONE}_gateway ros2 run as2_mavlink_gateway mavlink_gateway --ros-args -r __node:=mavlink_gateway_$DRONE -p drone_namespace:=$DRONE -p system_id:=$SYSID \
+  nstart ${DRONE}_gateway ros2 run as2_mavlink_gateway mavlink_gateway --ros-args -r __node:=mavlink_gateway_$DRONE -p drone_namespace:=$DRONE -p system_id:=$SYSID \
     -p fleet_token_file:="$TOKEN" -p fleet_endpoint:=http://127.0.0.1:$MANAGER_PORT -p bind_address:=0.0.0.0 -p udp_port:=$BIND \
     -p gcs_host:=127.0.0.1 -p gcs_port:=$GCS_PORT -p home_latitude:=$HOME_LAT -p home_longitude:=$HOME_LON -p home_altitude:=$HOME_ALT
   FLEET_JSON+="{\"drone_id\":\"$DRONE\",\"system_id\":$SYSID,\"manager_port\":$MANAGER_PORT},"

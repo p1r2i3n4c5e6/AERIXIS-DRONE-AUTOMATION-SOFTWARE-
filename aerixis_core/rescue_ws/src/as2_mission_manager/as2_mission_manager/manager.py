@@ -14,6 +14,9 @@ import time
 import uuid
 
 from .events import EventState, PREFIX
+
+# How long the behaviour-tree runner waits for an AERIXIS core service (ms).
+BT_SERVICE_WAIT_MS = max(1000, int(os.environ.get('AS2_BT_SERVICE_WAIT_MS', '15000') or 15000))
 from .validation import IDENTIFIER, validate_xml
 
 
@@ -199,7 +202,11 @@ class MissionManager:
             try:
                 self.process = subprocess.Popen(
                     [self.runner,'--ros-args','-r',f'__ns:=/{self.drone_id}',
-                     '-p',f'tree:={path}','-p',f'mission_id:={mission["id"]}'],
+                     '-p',f'tree:={path}','-p',f'mission_id:={mission["id"]}',
+                     # The runner is a new process per mission: in a busy ROS graph (4 simulated
+                     # drones) finding set_offboard_mode took > 5 s and the mission failed on the
+                     # ground (SITL 2026-11-01). A missing service still fails, after this wait.
+                     '-p',f'wait_for_service_timeout:={BT_SERVICE_WAIT_MS}'],
                     stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,
                     start_new_session=True)
                 self.worker_active = True

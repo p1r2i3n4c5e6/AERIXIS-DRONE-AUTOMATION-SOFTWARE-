@@ -1,5 +1,5 @@
 // Step 4 — Upload & start: send each drone its tree, validate onboard, then start it.
-import { h, icon, card, badge, hint, api, store, toast, fill, sha256, confirmDialog, emptyState, isFresh, rescueOf, radioFrames, alertBox } from './core.js';
+import { h, icon, card, badge, hint, api, store, toast, fill, sha256, confirmDialog, emptyState, isFresh, rescueOf, radioFrames, alertBox , prefs } from './core.js';
 import { parseXml, treeViewer, countNodes, loadCatalog } from './tree.js';
 import { readyToFly } from './page-readiness.js';
 
@@ -68,7 +68,7 @@ export const page = {
       this.busy.add(id); ui.progress.style.display = ''; this.update(store);
       await api('/api/fleet/command', body);
       toast(`${d.label}: ${{ stage: 'tree validated onboard', start: 'mission started', cancel: 'cancel requested', reconcile: 'ground state verified' }[action]}`, action === 'start' ? 'Follow it in Operations (step 5).' : '', 'ok');
-      if (action === 'start') { this.started.add(id); setTimeout(() => { location.hash = '#live'; }, 800); }
+      if (action === 'start') { this.started.add(id); this.simCameras([id]); setTimeout(() => { location.hash = '#live'; }, 800); }
     } catch (e) { toast(`${d.label}: ${action} failed`, e.message, 'bad', 10000); }
     finally { this.busy.delete(id); ui.progress.style.display = 'none'; this.update(store); }
   },
@@ -101,6 +101,13 @@ export const page = {
     if (!ids.length) return toast('Nothing to upload', 'Plan trees in step 3 first.', 'warn');
     if (action === 'start' && !(await confirmDialog(`Start ${ids.length} drone(s)?`, 'All selected drones arm, take off and fly autonomously.', { ok: 'Start all', kind: 'go' }))) return;
     for (const id of ids) { if (action === 'start') { const d = store.drone(id); await api('/api/fleet/command', { drone_id: id, action, mission_id: d.data.mission.id, revision: d.data.mission.revision, command_id: crypto.randomUUID() }).then(() => { this.started.add(id); toast(`${id}: started`, '', 'ok'); }).catch(e => toast(`${id}: start failed`, e.message, 'bad')); } else await this.act(id, action); }
+    if (action === 'start') this.simCameras(ids.filter(id => this.started.has(id)));
+  },
+  /** Simulation: open the drone camera window when a started mission uses the camera. */
+  simCameras(ids) {
+    if (store.mode !== 'sim' || !(prefs.get('simArena', {}).cameraOnMission ?? true)) return;
+    const camera = ids.some(id => { const a = store.assigned.get(id); return a && (a.usesCamera ?? a.template !== 'swarm_coverage'); });
+    if (camera) api('/api/sim/cameras', {}).then(r => { if (r.result === 'opened') toast('Drone camera window', 'Opening in its own window for this camera mission.', 'ok'); }).catch(() => {});
   },
   leaveWarnings(s) {
     const out = [];
@@ -125,7 +132,7 @@ export const page = {
         ui.shownAssignment = a;
         let tree = null; try { tree = a ? parseXml(a.xml) : null; } catch (e) { toast(`${d.label}: XML invalid`, e.message, 'bad'); }
         ui.viewer.update(tree, { keepView: false });
-        ui.payloadVisible = !!a && /<DropPayload|<ReleasePayload/.test(a.xml);
+        ui.payloadVisible = !!a && /<DropPayload|<ReleasePayload|<DropAtTarget/.test(a.xml);
         ui.payload.style.display = ui.payloadVisible ? '' : 'none';
         ui.assignedSha = null; if (a) sha256(a.xml).then(v => { ui.assignedSha = v; this.update(store); });
         const cost = h('span', { class: 'mono faint' });

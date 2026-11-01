@@ -302,7 +302,9 @@ inline void registerRescueNodes(
       "ManagedTakeoff", "ManagedLand", "ReportPayloadOutcome",
       // A8 tracker (gimbal-guided) rescue operations
       "TrackTarget", "ApproachOverhead", "OrbitTarget", "GeotagOverhead", "DropPayload",
-      "ReleaseTargetLock", "SetGimbalSearch", "ReturnToLaunch", "SetSearchArea", "ScanArea"})
+      "ReleaseTargetLock", "SetGimbalSearch", "ReturnToLaunch", "SetSearchArea", "ScanArea",
+      // Mission 7 delivery drones (2026-11-01): claim a geotag heard over the mesh, fly, drop
+      "AcquireTarget", "FlyToTarget", "DropAtTarget"})
   {
     factory.registerNodeType<RescueAction>(operation, context, operation);
   }

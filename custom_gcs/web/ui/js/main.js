@@ -12,20 +12,15 @@ import { watchEmergency, openEmergency, emergencyShown } from './emergency.js';
 import { loadMissions, catalog } from './missions.js';
 import { track } from './btlog.js';
 import { watchReconcile, autoReconcile } from './autoreconcile.js';
-import { mountFlightControls, update as updateFlightControls } from './flightctl.js?v=15';
+import { mountFlightControls, update as updateFlightControls } from './flightctl.js?v=16';
 import { onboardCalButton } from './onboardcal.js?v=14';
+import { setupAppearance } from './appearance.js?v=1';
 
 const PAGES = [connect, ready, plan, upload, live, logs];
 // Each workspace has its own colour (icon, active card, page accents, primary buttons).
 const COLOR = { connect: '#4f8df7', ready: '#22b07d', plan: '#9b6cf6', upload: '#f0a12c', live: '#f2556b', logs: '#22b5c9' };
 const ICON = { connect: 'link', ready: 'shield', plan: 'map', upload: 'upload', live: 'live', logs: 'doc' };
 
-function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme;
-  prefs.set('theme', theme);
-  $('#theme').innerHTML = icon(theme === 'dark' ? 'sun' : 'moon');
-  $('#theme').title = theme === 'dark' ? 'Light theme' : 'Dark theme';
-}
 
 function build() {
   const nav = $('#steps');
@@ -205,11 +200,9 @@ function splashSteps() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  const saved = prefs.get('theme', null);
-  applyTheme(saved || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
-  $('#theme').onclick = () => { applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); PAGES.forEach(p => p.map?.resize?.()); };
+  setupAppearance({ onResize: () => PAGES.forEach(p => p.map?.resize?.()) });
   $('#bell').innerHTML = icon('bell') + '<span class="count" id="bell-count"></span>';
-  $('#bell').onclick = e => { e.stopPropagation(); const p = $('#notif-panel'); p.hidden = !p.hidden; if (!p.hidden) notes.unread = 0; renderNotes(); };
+  $('#bell').onclick = e => { e.stopPropagation(); if ($('#ap-panel')) $('#ap-panel').hidden = true; const p = $('#notif-panel'); p.hidden = !p.hidden; if (!p.hidden) notes.unread = 0; renderNotes(); };
   $('#notif-clear').onclick = () => notes.clear();
   $('#em-btn').innerHTML = icon('warn') + '<span>Emergency</span>';
   $('#em-btn').onclick = () => openEmergency();

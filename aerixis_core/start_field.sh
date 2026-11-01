@@ -57,6 +57,10 @@ OLD_GCS="$(pgrep -f 'python3 server.py --web' | head -1)"
     [ -n "$NEW_GCS" ] && [ "$NEW_GCS" != "$OLD_GCS" ] || continue
     curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$WEB_PORT/api/state" && break
   done
+  # Field mode first: the GCS keeps simulation and field apart (aircraft list and link), and a
+  # browser tab left in Simulation mode must not take the radio link over.
+  curl -s -X POST -H 'Content-Type: application/json' -H 'X-AS2-GCS: 1' -d '{"mode":"real"}' \
+    "http://127.0.0.1:$WEB_PORT/api/fleet/use" >/dev/null || true
   if [ -n "$RADIO" ]; then
     curl -s -X POST -H 'Content-Type: application/json' \
       -d "{\"type\":\"serial\",\"port\":\"$RADIO\",\"baud\":$RADIO_BAUD}" \

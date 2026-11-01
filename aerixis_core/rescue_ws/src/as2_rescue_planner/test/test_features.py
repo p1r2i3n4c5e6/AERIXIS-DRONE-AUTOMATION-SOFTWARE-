@@ -171,3 +171,82 @@ def test_emergency_action_setting_changes_only_the_recovery_branch():
     with pytest.raises(ValueError):
         plan_mission(dict(kml=KML.read_text(), fleet=[dict(drone_id='drone0', endurance_s=1200)], altitude_m=12,
                           emergency_action='HOVER', **base))
+
+
+# Per-aircraft behaviour (2026-11-01): "Search & orbit" — only the drones the operator chose
+# orbit a person; the others geotag and keep searching.
+SEARCH = dict(type='coverage', detect=True, geotag=True, orbit=False, resume=True)
+ORBIT = dict(SEARCH, orbit=True)
+
+
+def plan_two(own=None, **kw):
+    fleet = [dict(drone_id='drone0', endurance_s=1800), dict(drone_id='drone1', endurance_s=1800, **({'features': own} if own is not None else {}))]
+    return plan_mission(dict(kml=KML.read_text(), fleet=fleet, mission_id=uuid.uuid4().hex, template='custom',
+                             features=SEARCH, altitude_m=15, spacing_m=15, speed_mps=1.5, **kw))
+
+
+def test_only_the_chosen_drone_orbits_and_both_keep_searching():
+    result = plan_two(ORBIT, orbit_radius_m=8, orbit_laps=1)
+    tags = {d: [e.tag for e in ET.fromstring(result['xml'][d]).iter()] for d in ('drone0', 'drone1')}
+    assert 'OrbitTarget' in tags['drone1'] and 'OrbitTarget' not in tags['drone0']
+    for d in ('drone0', 'drone1'):
+        assert 'GeotagOverhead' in tags[d] and 'ResumeCoverage' in tags[d] and 'SurveyWaypoint' in tags[d]
+    orbit = next(ET.fromstring(result['xml']['drone1']).iter('OrbitTarget'))
+    assert float(orbit.get('radius_m')) == 8 and float(orbit.get('laps')) == 1
+    assert result['aircraft_features']['drone1']['orbit'] is True
+
+
+def test_per_aircraft_features_may_not_change_the_mission_type_or_payload():
+    with pytest.raises(ValueError, match='may not change type'):
+        plan_two(dict(ORBIT, type='watch', geotag=False))
+    with pytest.raises(ValueError, match='may not change payload'):
+        plan_two(dict(SEARCH, payload=True, drop=True))
+
+
+def test_per_aircraft_features_need_a_custom_mission():
+    fleet = [dict(drone_id='drone0', endurance_s=1800, features=ORBIT)]
+    with pytest.raises(ValueError, match='custom mission'):
+        plan_mission(dict(kml=KML.read_text(), fleet=fleet, mission_id=uuid.uuid4().hex,
+                          template='human_geotag_resume', altitude_m=15, spacing_m=15, speed_mps=1.5))
+
+
+# Mission 7 (2026-11-01): 2 search drones + 2 delivery drones.
+def plan_roles(roles, **kw):
+    fleet = [dict(drone_id='drone%d' % i, endurance_s=1800, **({'role': r} if r else {})) for i, r in enumerate(roles)]
+    return plan_mission(dict(kml=KML.read_text(), fleet=fleet, mission_id=uuid.uuid4().hex, template='custom',
+                             features=SEARCH, altitude_m=15, spacing_m=15, speed_mps=1.5, **kw))
+
+
+def test_delivery_drones_get_no_lanes_and_a_delivery_tree():
+    result = plan_roles(['search', 'search', 'delivery', 'delivery'], delivery_wait_s=900, delivery_speed=2)
+    assert result['complete'], result['reason']
+    assert result['delivery'] == ['drone2', 'drone3']
+    by_id = {b['drone_id']: b for b in result['bundles']}
+    assert set(by_id) == {'drone0', 'drone1', 'drone2', 'drone3'}
+    for d in ('drone2', 'drone3'):
+        tags = [e.tag for e in ET.fromstring(result['xml'][d]).iter()]
+        assert by_id[d]['coverage']['waypoints'] == []
+        assert tags.index('AcquireTarget') < tags.index('Arm') < tags.index('FlyToTarget') < tags.index('DropAtTarget')
+        assert 'SurveyWaypoint' not in tags and 'HumanDetected' not in tags
+        assert 'PeersFresh' in tags and 'RecoverThenFail' in tags and 'ReturnToLaunch' in tags
+        acquire = next(ET.fromstring(result['xml'][d]).iter('AcquireTarget'))
+        assert float(acquire.get('timeout_s')) == 900
+        validate_route_bundle(by_id[d], d, result['xml'][d])      # what the GCS checks at staging
+    for d in ('drone0', 'drone1'):
+        tags = [e.tag for e in ET.fromstring(result['xml'][d]).iter()]
+        assert 'SurveyWaypoint' in tags and 'GeotagOverhead' in tags and 'AcquireTarget' not in tags
+    # Lanes are split between the two search drones only.
+    assert {a['drone_id'] for a in result['plan']['assignments']} == {'drone0', 'drone1'}
+    assert len(result['manifest']['artifacts']) == 4
+
+
+def test_delivery_needs_geotagging_search_drones():
+    with pytest.raises(ValueError, match='at least one search drone'):
+        plan_roles(['delivery', 'delivery'])
+    with pytest.raises(ValueError, match='role must be'):
+        plan_roles(['search', 'courier'])
+    fleet = [dict(drone_id='drone0', endurance_s=1800), dict(drone_id='drone1', endurance_s=1800, role='delivery')]
+    with pytest.raises(ValueError, match='geotag'):
+        plan_mission(dict(kml=KML.read_text(), fleet=fleet, mission_id=uuid.uuid4().hex, template='custom',
+                          features=dict(type='coverage', detect=True, geotag=False, orbit=True, resume=True),
+                          altitude_m=15, spacing_m=15, speed_mps=1.5))

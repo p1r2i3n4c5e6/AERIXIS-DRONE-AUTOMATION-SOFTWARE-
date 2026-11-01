@@ -13,11 +13,20 @@
   <link rel="apple-touch-icon" href="/ui/brand/aerixis-icon-512.png">
   <meta name="theme-color" content="#0B2347">
   <link rel="stylesheet" href="/vendor/leaflet.css">
-  <link rel="stylesheet" href="/ui/css/gcs.css?v=13">
+  <link rel="stylesheet" href="/ui/css/gcs.css?v=23">
   <link rel="stylesheet" href="/ui/css/splash.css?v=1">
   <script>
     // Apply the saved theme before first paint so the page never flashes.
-    try { const t = JSON.parse(localStorage.getItem('as2gcs.theme')); document.documentElement.dataset.theme = t || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch (e) { }
+    // Appearance (appearance.js): mode light / dark / midnight / system, accent multi or one colour.
+    try {
+      const d = document.documentElement, a = JSON.parse(localStorage.getItem('as2gcs.appearance')) || {};
+      let m = a.mode || JSON.parse(localStorage.getItem('as2gcs.theme')) || 'system';
+      if (m === 'system') m = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      d.dataset.theme = m === 'light' ? 'light' : 'dark';
+      if (m === 'midnight') d.dataset.shade = 'midnight';
+      if (a.accent && a.accent !== 'multi') { d.dataset.accent = 'single'; d.style.setProperty('--theme-accent', a.accent); }
+      else d.dataset.accent = 'multi';
+    } catch (e) { document.documentElement.dataset.theme = 'light'; }
   </script>
 </head>
 <body>
@@ -50,8 +59,8 @@
         <button class="side-menu-btn" id="side-menu-btn" aria-label="Hide or show the menu"></button>
       </div>
       <nav id="steps"></nav>
-      <div id="flight-controls"></div>
       <div class="side-foot" id="foot"></div>
+      <div id="flight-controls"></div>
     </aside>
     <div class="side-scrim" id="side-scrim"></div>
     <main class="main">
@@ -63,7 +72,7 @@
         <span class="pill" id="status-pill"></span>
         <button class="btn em-btn" id="em-btn" title="Emergency: return to launch or land one or all aircraft"></button>
         <button class="icon-btn bell" id="bell" aria-label="Notifications"><span class="count" id="bell-count"></span></button>
-        <button class="icon-btn" id="theme" aria-label="Switch theme"></button>
+        <button class="icon-btn" id="theme" aria-label="Appearance"></button>
         <section class="notif-panel" id="notif-panel" hidden>
           <div class="notif-head"><b>Notifications</b><span class="faint" id="notif-sub"></span><button class="btn sm ghost" id="notif-clear">Clear all</button></div>
           <div class="notif-set" id="notif-set"></div>
@@ -75,6 +84,6 @@
   </div>
   <div class="toasts" id="toasts" aria-live="polite"></div>
   <script src="/vendor/leaflet.js" onerror="window.AerixisSplash && AerixisSplash.step('maps', 'warn', 'map library missing')"></script>
-  <script type="module" src="/ui/js/main.js?v=15" onerror="window.AerixisSplash && AerixisSplash.fail('The interface could not start', 'ui/js/main.js did not load from the GCS server.')"></script>
+  <script type="module" src="/ui/js/main.js?v=25" onerror="window.AerixisSplash && AerixisSplash.fail('The interface could not start', 'ui/js/main.js did not load from the GCS server.')"></script>
 </body>
 </html>

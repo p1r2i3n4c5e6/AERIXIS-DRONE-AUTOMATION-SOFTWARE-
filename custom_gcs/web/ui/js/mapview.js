@@ -1,6 +1,7 @@
 // Leaflet map helper. Plan coordinates are metres east/north of the KML plan origin; the
 // onboard AERIXIS earth frame uses the same origin once the plan is staged.
 import { icon, prefs } from './core.js';
+import { arenaLatLon, nearestTruth } from './simarena.js';
 
 const LANE_COLORS = ['#2f6aa8', '#b8501f', '#3d8b5a', '#7a4fa3', '#9a7b12', '#2a8a91'];
 export const laneColor = i => LANE_COLORS[i % LANE_COLORS.length];
@@ -73,10 +74,12 @@ export function createMap(element, { center, zoom } = {}) {
     const wrap = L.DomUtil.create('div', 'leaflet-bar'); wrap.append(b); return wrap; } });
   new Locate().addTo(map);
   if (prefs.get('locate', true)) startGeolocation();
-  const layers = { area: L.layerGroup().addTo(map), lanes: L.layerGroup().addTo(map), trails: L.layerGroup().addTo(map),
+  const layers = { arena: L.layerGroup().addTo(map), area: L.layerGroup().addTo(map), lanes: L.layerGroup().addTo(map), trails: L.layerGroup().addTo(map),
     drones: L.layerGroup().addTo(map), geotags: L.layerGroup().addTo(map) };
+  // Remember where the operator looks: Connect -> Simulation uses it as the arena location.
+  map.on('moveend', () => { const c = map.getCenter(); prefs.set('mapCenter', [+c.lat.toFixed(7), +c.lng.toFixed(7)]); });
   const markers = new Map(), trails = new Map();
-  let userMoved = false, tagKey = '';
+  let userMoved = false, tagKey = '', arenaKey = '';
   map.on('dragstart', () => { userMoved = true; });
   map.on('zoomstart', e => { if (e.originalEvent) userMoved = true; });
   element.addEventListener('wheel', () => { userMoved = true; }, { passive: true });
@@ -138,14 +141,32 @@ export function createMap(element, { center, zoom } = {}) {
     },
     clearTrails() { for (const t of trails.values()) t.setLatLngs([]); },
     showGeotags(tags) {
-      const key = tags.map(t => t.id || `${t.latitude},${t.longitude}`).join('|');
+      const key = tags.map(t => t.id || `${t.latitude},${t.longitude}`).join('|') + '|' + arenaKey;
       if (key === tagKey) return; tagKey = key;
       layers.geotags.clearLayers();
       for (const t of tags) {
+        // Simulation arena: how far the geotag is from the nearest real (ground-truth) person.
+        const truth = nearestTruth(t.latitude, t.longitude);
+        const check = truth ? `<br><span class="geo-truth">Arena check: ${truth.dist.toFixed(1)} m from ${truth.name}</span>` : '';
         L.marker([t.latitude, t.longitude], { icon: L.divIcon({ html: '<div class="geo-marker"></div>', className: '', iconSize: [18, 18], iconAnchor: [9, 18] }) })
-          .addTo(layers.geotags).bindTooltip(`${t.label}`, { direction: 'right', offset: [8, -10] })
-          .bindPopup(`<b>${t.label}</b> · ${t.drone || ''}<br>${t.latitude.toFixed(7)}, ${t.longitude.toFixed(7)}<br>±${t.sigma_m} m`);
+          .addTo(layers.geotags).bindTooltip(`${t.label}${truth ? ` · ${truth.dist.toFixed(1)} m off` : ''}`, { direction: 'right', offset: [8, -10] })
+          .bindPopup(`<b>${t.label}</b> · ${t.drone || ''}<br>${t.latitude.toFixed(7)}, ${t.longitude.toFixed(7)}<br>±${t.sigma_m} m${check}`);
       }
+    },
+    /** Simulation: the rescue arena outline and its ground-truth people (null clears it). */
+    showArena(arena) {
+      const key = arena ? `${arena.home.latitude_deg},${arena.home.longitude_deg},${arena.humans.length}` : '';
+      if (key === arenaKey) return; arenaKey = key; tagKey = '';
+      layers.arena.clearLayers();
+      if (!arena) return;
+      const [[w, s], [e, n]] = arena.bounds_enu;
+      const outline = L.rectangle([arenaLatLon(arena, w, s), arenaLatLon(arena, e, n)],
+        { color: '#f0a12c', weight: 2, dashArray: '8 6', fillColor: '#f0a12c', fillOpacity: .04, interactive: false }).addTo(layers.arena);
+      L.marker(arenaLatLon(arena, w, n), { icon: L.divIcon({ html: '<div class="arena-tag">Simulation arena · 300 m</div>', className: '', iconSize: [150, 20], iconAnchor: [-4, -4] }), interactive: false }).addTo(layers.arena);
+      for (const p of arena.humans)
+        L.circleMarker([p.latitude, p.longitude], { radius: 4, color: '#fff', weight: 1, fillColor: '#f0a12c', fillOpacity: .95 })
+          .addTo(layers.arena).bindTooltip(`${p.name} (ground truth)`, { direction: 'top' });
+      if (!userMoved && !markers.size) map.fitBounds(outline.getBounds(), { padding: [20, 20] });
     },
     follow(points) { if (!userMoved && points.length) map.fitBounds(L.latLngBounds(points).pad(.6), { maxZoom: 19, animate: false }); },
     focus(latlon) { if (latlon) { userMoved = true; map.setView(latlon, Math.max(map.getZoom(), 19)); } },

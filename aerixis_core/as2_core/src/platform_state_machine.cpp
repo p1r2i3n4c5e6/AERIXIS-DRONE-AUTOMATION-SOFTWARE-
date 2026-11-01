@@ -164,6 +164,21 @@ void PlatformStateMachine::defineTransitions()
     StateMachineTransition{
       "EMERGENCY", as2_msgs::msg::PlatformStatus::LANDING, Event::EMERGENCY,
       as2_msgs::msg::PlatformStatus::EMERGENCY});
+
+  // AERIXIS (2026-10-31): ways out of EMERGENCY towards safe states only. Without them a
+  // cancelled take-off (the take-off behaviour sends EMERGENCY on any non-success end) left the
+  // aircraft armed in EMERGENCY for good: LandBehavior could not land it ("EMERGENCY -> LAND"),
+  // a PX4 disarm left AS2 in EMERGENCY, and ground reconciliation was impossible (SITL).
+  // EMERGENCY -> [LAND] -> LANDING
+  transitions_.emplace_back(
+    StateMachineTransition{
+      "LAND", as2_msgs::msg::PlatformStatus::EMERGENCY, Event::LAND,
+      as2_msgs::msg::PlatformStatus::LANDING});
+  // EMERGENCY -> [DISARM] -> DISARMED (the FC is disarmed: the emergency is over)
+  transitions_.emplace_back(
+    StateMachineTransition{
+      "DISARM", as2_msgs::msg::PlatformStatus::EMERGENCY, Event::DISARM,
+      as2_msgs::msg::PlatformStatus::DISARMED});
 }
 
 std::string PlatformStateMachine::eventToString(int8_t event)

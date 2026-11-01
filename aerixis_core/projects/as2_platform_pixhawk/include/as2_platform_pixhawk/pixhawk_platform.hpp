@@ -277,6 +277,8 @@ private:
   void px4imuCallback(const px4_msgs::msg::SensorCombined::SharedPtr msg);
   void px4odometryCallback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg);
   void px4VehicleControlModeCallback(const px4_msgs::msg::VehicleControlMode::SharedPtr msg);
+  // Walk AS2's state machine to DISARMED after PX4 reports disarmed (AERIXIS).
+  void walkToDisarmed();
   void px4BatteryCallback(const px4_msgs::msg::BatteryStatus::SharedPtr msg);
   void px4GpsCallback(const px4_msgs::msg::SensorGps::SharedPtr msg);
 };

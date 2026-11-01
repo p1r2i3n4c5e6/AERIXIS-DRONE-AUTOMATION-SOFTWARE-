@@ -6,6 +6,7 @@ from bt_execution import LocalTreeRun
 from fleet import Fleet
 import planner_bridge
 import onboard_discovery
+from sim_control import SimControl
 from mission_store import MissionStore
 from radio_rpc import RadioClient, MESSAGE_TYPE as FLEET_MESSAGE_TYPE
 import glob
@@ -260,9 +261,42 @@ class MavlinkBridge:
                 }
             self._append_log('INFO', f'MAVLink transport: Serial Telemetry connected on {port} @ {baud} baud')
 
+    LOOPBACK = ('127.0.0.1', 'localhost', '::1', '0.0.0.0')
+
+    def set_mode(self, mode):
+        """Simulation and Field never share a link (2026-10-31: in Field mode the GCS still showed the
+        simulated drone's heartbeat on UDP 127.0.0.1:14555 as "Telemetry radio connected").
+        Field: close a link to this laptop's simulation and ignore its local diagnostics.
+        Simulation: close the serial radio."""
+        if mode not in ('sim', 'real'):
+            raise ValueError('mode must be sim or real')
+        self.mode = mode
+        with self.state_lock:
+            self.state['link_mode'] = mode      # the GCS pages follow it (one server, several windows)
+            conn = dict(self.state.get('connection') or {})
+        host = str(conn.get('target') or '').rsplit(':', 1)[0]
+        closed = None
+        if mode == 'real' and self.conn_type == 'udp' and self.socket and host in self.LOOPBACK:
+            closed = 'simulation link (UDP ' + str(conn.get('target')) + ')'
+        elif mode == 'sim' and self.conn_type == 'serial' and self.serial_conn:
+            closed = 'telemetry radio (' + str(conn.get('target')) + ')'
+        if closed:
+            self.disconnect()
+            with self.state_lock:
+                self.state['gateway_heartbeat'] = 0.0
+                self.state['as2_link'] = {'connected': None, 'detail': 'Waiting for gateway diagnostics', 'updated': 0.0}
+                self.state['px4_link'] = {'connected': None, 'detail': 'Waiting for PX4 DDS diagnostics', 'updated': 0.0}
+            self._append_log('INFO', f'{"Field" if mode == "real" else "Simulation"} mode: closed the {closed}')
+        return closed
+
     def connect(self, config):
         """Switch transport dynamically between UDP and Serial Telemetry."""
         target_type = config.get('type', 'udp').lower()
+        mode = getattr(self, 'mode', None)
+        if mode == 'real' and target_type != 'serial' and str(config.get('host', '127.0.0.1')) in self.LOOPBACK:
+            raise ValueError('Field mode: a link to the simulation on this laptop is not allowed. Switch to Simulation mode for SITL.')
+        if mode == 'sim' and target_type == 'serial':
+            raise ValueError('Simulation mode: the telemetry radio is not used. Switch to Field radio to fly real aircraft.')
         if target_type == 'serial':
             port = config.get('port', '/dev/ttyUSB0')
             baud = int(config.get('baud', 57600))
@@ -1153,6 +1187,8 @@ class MavlinkBridge:
                 for _ in range(200):
                     try:
                         packet, _ = self.diagnostics_socket.recvfrom(4096, socket.MSG_DONTWAIT)
+                        if getattr(self, 'mode', None) == 'real':
+                            continue    # local diagnostics come from the simulation only
                     except (BlockingIOError, InterruptedError):
                         break
                     self.rx_bytes += len(packet)
@@ -1279,6 +1315,10 @@ def get_ros_nodes_status():
     }
 
 
+sim = SimControl()   # PX4 SITL rescue arena (Simulation mode, this laptop only)
+FLEET_CONFIG = str(Path(__file__).parent / 'config/fleet.json')
+
+
 def make_handler(bridge, fleet=None, missions=None):
     missions = missions or MissionStore(Path(__file__).parent / 'config/missions')
 
@@ -1326,6 +1366,17 @@ def make_handler(bridge, fleet=None, missions=None):
                 hints = [h for h in (query.get('hint') or [''])[0].split(',') if h]
                 self._json({'panels': onboard_discovery.discover(fresh='fresh' in query, hints=hints)})
                 return
+            if self.path.startswith('/api/sim/'):
+                # Simulation control: this laptop only (the GCS also listens on Wi-Fi for phones).
+                if self.client_address[0] not in ('127.0.0.1', '::1'):
+                    self._json({'error': 'Simulation control is available on the GCS computer only'}, 403)
+                    return
+                if self.path == '/api/sim/status':
+                    self._json(sim.status())
+                    return
+                if self.path == '/api/sim/arena':
+                    self._json({'arena': sim.arena()})
+                    return
             if self.path == '/api/plan/status':
                 # Report planner availability so the UI can disable the KML
                 # workflow honestly instead of failing at upload time.
@@ -1370,6 +1421,62 @@ def make_handler(bridge, fleet=None, missions=None):
                 if not isinstance(request, dict):
                     raise ValueError('Expected a JSON object')
 
+                if self.path.startswith('/api/sim/'):
+                    if self.client_address[0] not in ('127.0.0.1', '::1'):
+                        self._json({'error': 'Simulation control is available on the GCS computer only'}, 403)
+                        return
+                    if self.path == '/api/sim/start':
+                        sim.start(request.get('drones', 1), request.get('home') or [], request.get('show3d', True), request.get('cameras', True))
+                        self._json({'ok': True})
+                    elif self.path == '/api/sim/stop':
+                        sim.stop(); self._json({'ok': True})
+                    elif self.path == '/api/sim/cameras':
+                        self._json({'ok': True, 'result': sim.cameras()})
+                    elif self.path == '/api/sim/add':
+                        if Path(fleet.path).name != 'fleet_sim.json':
+                            raise ValueError('Switch to Simulation mode first')
+                        if any((st.get('data') or {}).get('active') for st in fleet.states.values()):
+                            raise ValueError('A drone is flying a mission: add drones on the ground only')
+                        self._json({'ok': True, 'drones': sim.add()})
+                    elif self.path == '/api/sim/gui':
+                        sim.gui(); self._json({'ok': True})
+                    elif self.path == '/api/sim/pair':
+                        # Add the simulated drones to the SIMULATION aircraft list only (never the field list).
+                        if Path(fleet.path).name != 'fleet_sim.json':
+                            raise ValueError('Switch to Simulation mode first (simulation aircraft list)')
+                        added = []
+                        for drone_id, system_id, token in sim.pairing():
+                            fleet.configure({'drone_id': drone_id, 'label': f'Sim {system_id}', 'transport': 'mavlink',
+                                             'system_id': system_id, 'token': token})
+                            added.append(drone_id)
+                        if not added:
+                            raise ValueError('No simulated drones found: start the simulation first')
+                        # Drop simulated drones from an earlier, larger run (simulation list only).
+                        removed = []
+                        for drone_id in [k for k in list(fleet.profiles) if k not in added]:
+                            try:
+                                fleet.remove(drone_id); removed.append(drone_id)
+                            except ValueError:
+                                pass        # executing: leave it
+                        self._json({'ok': True, 'added': added, 'removed': removed})
+                    else:
+                        self._json({'error': 'Not found'}, 404)
+                    return
+                if self.path == '/api/fleet/use':
+                    # Simulation and Field keep separate aircraft lists. Only this laptop may switch
+                    # to the simulation list: a phone browser left in Simulation mode must never hide
+                    # the real aircraft during field operation.
+                    mode = request.get('mode')
+                    if mode not in ('sim', 'real'):
+                        raise ValueError('mode must be sim or real')
+                    if mode == 'sim' and self.client_address[0] not in ('127.0.0.1', '::1'):
+                        self._json({'ok': False, 'changed': False, 'list': Path(fleet.path).name, 'note': 'simulation list on the GCS computer only'})
+                        return
+                    base = Path(FLEET_CONFIG).parent
+                    result = fleet.use(base / ('fleet_sim.json' if mode == 'sim' else Path(FLEET_CONFIG).name))
+                    result['link_closed'] = bridge.set_mode(mode)
+                    self._json(result)
+                    return
                 if self.path == '/api/fleet/remove':
                     if self.headers.get('X-AS2-GCS') != '1':
                         raise ValueError('Missing GCS request header')
@@ -1515,6 +1622,8 @@ def main():
         args.home_latitude, args.home_longitude, args.home_altitude,
         args.diagnostics_host, args.diagnostics_port)
 
+    global FLEET_CONFIG
+    FLEET_CONFIG = args.fleet_config      # field list; the simulation list sits next to it (fleet_sim.json)
     fleet = Fleet(args.fleet_config, bridge.fleet_radio)
     missions = MissionStore(Path(args.fleet_config).parent / 'missions')
     server = ThreadingHTTPServer((args.web_host, args.web_port), make_handler(bridge, fleet, missions))

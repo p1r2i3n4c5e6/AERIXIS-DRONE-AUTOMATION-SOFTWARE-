@@ -1,0 +1,5 @@
+# World only. PX4 SITL spawns and controls the aircraft.
+world_name: rescue_arena_300
+use_sim_time: true
+drones: []
+objects: []

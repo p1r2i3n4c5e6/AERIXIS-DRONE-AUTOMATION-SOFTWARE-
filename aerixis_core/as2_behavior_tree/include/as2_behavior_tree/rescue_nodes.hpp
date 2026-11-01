@@ -109,7 +109,11 @@ public:
       BT::InputPort<double>("pitch_deg", -45.0, "SetGimbalSearch: gimbal pitch, -90 = straight down"),
       BT::InputPort<double>("settle_s", 1.5, "ApproachOverhead: overhead must hold this long"),
       BT::InputPort<std::string>("area", "", "SetSearchArea: plan-frame polygon x,y;x,y;... (metres)"),
-      BT::InputPort<double>("yaw_rate_dps", 12.0, "ScanArea: slow yaw sweep rate while holding")};
+      BT::InputPort<double>("yaw_rate_dps", 12.0, "ScanArea: slow yaw sweep rate while holding"),
+      // Straight-down search (2026-11-01): planned from the camera field of view, height and
+      // lane spacing; -1 = the onboard default sweep.
+      BT::InputPort<double>("sweep_deg", -1.0, "SetGimbalSearch: side sweep from vertical (0 = still)"),
+      BT::InputPort<double>("sweep_period_s", 0.0, "SetGimbalSearch: side sweep period")};
   }
   BT::NodeStatus onStart() override
   {
@@ -126,6 +130,8 @@ public:
     getInput("pitch_deg", pitch); getInput("settle_s", settle);
     std::string area; double yaw_rate = 12;
     getInput("area", area); getInput("yaw_rate_dps", yaw_rate);
+    double sweep = -1.0, sweep_period = 0.0;
+    getInput("sweep_deg", sweep); getInput("sweep_period_s", sweep_period);
     id_ = context_->run + ":" + std::to_string(UID()) + ":" + std::to_string(++context_->counter);
     context_->results[id_] = "RUNNING"; started_ = RescueContext::Clock::now();
     pending_ = nlohmann::json(
@@ -135,7 +141,8 @@ public:
         {"pose", pose}, {"speed", speed}, {"height", height}, {"radius_m", radius},
         {"laps", laps}, {"lost_timeout_s", lost}, {"duration_s", duration},
         {"suppress_s", suppress}, {"pitch_deg", pitch}, {"settle_s", settle},
-        {"area", area}, {"yaw_rate_dps", yaw_rate}});
+        {"area", area}, {"yaw_rate_dps", yaw_rate}, {"sweep_deg", sweep},
+        {"sweep_period_s", sweep_period}});
     dispatched_ = false;
     if (context_->commands->get_subscription_count() > 0) {
       context_->publish(pending_); dispatched_ = true;

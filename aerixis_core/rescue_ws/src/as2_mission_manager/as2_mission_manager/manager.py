@@ -129,6 +129,10 @@ class MissionManager:
                     raise ValueError('Explicit operator load confirmation is required')
                 payload_id=operator_payload.get('payload_id')
                 if not isinstance(payload_id,str) or not IDENTIFIER.fullmatch(payload_id):raise ValueError('Enter a unique payload ID')
+                # Several packages on one drone (2026-11-01): how many the operator loaded.
+                count=operator_payload.get('count',1)
+                if not isinstance(count,int) or isinstance(count,bool) or not 1<=count<=20:
+                    raise ValueError('Loaded package count must be 1..20')
                 if not self.observer or not self.observer.safe_on_ground():raise ValueError('Operator load confirmation requires fresh disarmed ground state')
             if route_bundle is not None:
                 from as2_rescue_planner.mission import validate_route_bundle
@@ -149,7 +153,9 @@ class MissionManager:
             if operator_payload is not None:
                 atomic_json(self.directory/(mission_id+'.payload.json'),dict(
                     mission_id=mission_id,payload_id=operator_payload['payload_id'],confirmed_loaded=True,
+                    count=operator_payload.get('count',1),
                     confirmed_at=time.time(),source='operator',physical_confirmation=False))
+                mission['operator_payload_count']=operator_payload.get('count',1)
                 mission['operator_payload_id']=operator_payload['payload_id']
             self.record['mission'] = mission
             atomic_json(self.file,self.record)

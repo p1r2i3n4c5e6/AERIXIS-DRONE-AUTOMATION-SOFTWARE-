@@ -13,24 +13,25 @@ class DeliveryTests(unittest.TestCase):
                                            base.EngineVisionTests.step, base.EngineVisionTests.put,
                                            base.EngineVisionTests.command)
 
-    def mesh(self, tags=(), claims=()):
-        """Swarm status as swarm_agent publishes it: peers' geotags and live claims."""
+    def mesh(self, tags=(), claims=(), served=()):
+        """Swarm status as swarm_agent publishes it: peers' geotags, live claims, served people."""
         self.e.put('swarm', dict(stamp=self.clock(), required=True, peers_fresh=True, separation_safe=True,
                                  owned=False, peers=[], keep_out=[],
                                  peer_tags=[dict(owner='drone0', xy=list(xy)) for xy in tags],
-                                 peer_claims=[dict(c) for c in claims]))
+                                 peer_claims=[dict(c) for c in claims],
+                                 peer_served=[dict(owner='drone3', xy=list(xy)) for xy in served]))
 
-    def on_ground(self, tags=(), claims=(), position=(0, 0, 0.2)):
+    def on_ground(self, tags=(), claims=(), position=(0, 0, 0.2), served=()):
         self.step(0.5)
         self.put(position=position, locked=False)
-        self.mesh(tags, claims)
+        self.mesh(tags, claims, served)
 
-    def acquire(self, tags, claims=()):
-        self.on_ground(tags, claims)
+    def acquire(self, tags, claims=(), served=()):
+        self.on_ground(tags, claims, served=served)
         self.command('AcquireTarget')
         self.assertIsNone(self.engine.tick())
         for _ in range(int(TARGET_SETTLE_S / 0.5) + 2):
-            self.on_ground(tags, claims)
+            self.on_ground(tags, claims, served=served)
             result = self.engine.tick()
             if result:
                 return result
@@ -142,6 +143,54 @@ class DeliveryTests(unittest.TestCase):
         self.assertFalse(self.engine.flags()['OverheadDropReady'])
         self.assertIn('Not steady over', self.engine.tick()['reason'])
         self.assertFalse(any(c[0] == 'release' for c in self.d.calls))
+
+
+    # Several packages (2026-11-01) ----------------------------------------------------------
+    def test_a_person_a_peer_already_served_is_skipped(self):
+        self.acquire([(10, 0), (30, 0)], served=[(10.4, 0.2)])
+        self.assertEqual(self.engine.target, 'T30_0')
+
+    def test_after_a_drop_the_next_person_is_taken_not_the_same_one(self):
+        self.engine.safety.limits = Limits(overhead_envelope_verified=True, allow_operator_load=True,
+                                           min_overhead_agl_m=5.0, max_overhead_agl_m=20.0)
+        tags = [(10, 0), (25, 0)]
+        self.fly_to((10.0, 0.0))
+        self.step(); self.put(position=(10, 0, 15), locked=False); self.mesh(tags)
+        self.e.put('payload', dict(operator_confirmed=True, consumed=False, payload_id='kit#1'))
+        self.command('DropAtTarget')
+        self.assertIsNone(self.engine.tick())
+        self.step(0.2); self.put(position=(10, 0, 15), locked=False); self.mesh(tags)
+        self.assertIsNone(self.engine.tick())
+        self.step(); self.put(position=(10, 0, 15), locked=False); self.mesh(tags)
+        self.e.put('payload', dict(transaction_id=self.engine.last_release, operator_only=True,
+                                   command_sent=True, payload_id='kit#2', operator_confirmed=True, consumed=False))
+        self.assertEqual(self.engine.tick()['status'], 'SUCCESS')
+        self.assertEqual(self.engine.vision.served_points, [[10.0, 0.0]])
+        # Second package, in the air: the next unserved person.
+        self.step(); self.put(position=(10, 0, 15), locked=False); self.mesh(tags)
+        self.command('AcquireTarget')
+        result = None
+        for _ in range(10):
+            self.step(0.5); self.put(position=(10, 0, 15), locked=False); self.mesh(tags)
+            result = self.engine.tick() or result
+            if result:
+                break
+        self.assertEqual(result['status'], 'SUCCESS')
+        self.assertEqual(self.engine.target, 'T25_0')
+        self.assertEqual(self.engine.vision.claim_state()['label'], 'T25_0')
+
+
+class ServedOverMeshTests(unittest.TestCase):
+    def test_served_people_travel_in_peer_frames_and_are_kept(self):
+        from as2_rescue_runtime.swarm import PeerPeople, compact_peer, expand_peer, recent_served
+        frame = dict(owner='drone2', stamp=10.0, position=[0, 0, 15], frame_id='earth',
+                     served=recent_served(dict(served=[[1, 2], [10.04, 0.0]])))
+        wire = compact_peer(frame)
+        self.assertEqual(wire['d'], [[1.0, 2.0], [10.0, 0.0]])
+        people = PeerPeople()
+        people.update('drone2', expand_peer(wire), now=10.0)
+        people.update('drone2', dict(owner='drone2', stamp=11.0), now=11.0)   # newer frame without them
+        self.assertEqual([p['xy'] for p in people.served(12.0)], [[1.0, 2.0], [10.0, 0.0]])
 
 
 if __name__ == '__main__':

@@ -316,6 +316,8 @@ class VisionOps:
         # been served. Still published as this drone's claim (ReturnToLaunch clears the live
         # claim) so the other delivery drone never serves the same person.
         self.delivered = None
+        # Every person this drone delivered to in this mission, plan-frame [x, y] (mesh 'served').
+        self.served_points = []
 
     # Shared evidence ---------------------------------------------------------------------
     @property
@@ -565,7 +567,11 @@ class VisionOps:
         length = math.hypot(bx - ax, by - ay)
         if length < 1.0:
             return None
-        ahead = (person[0] - here[0]) * (bx - ax) / length + (person[1] - here[1]) * (by - ay) / length
+        ux, uy = (bx - ax) / length, (by - ay) / length
+        # Along the lane, a person beyond its end counts as at the end: the drone turns there and
+        # would never come abeam (SITL/GCS 2026-11-01: a person at a lane corner was never tagged).
+        along_person = min((person[0] - ax) * ux + (person[1] - ay) * uy, length)
+        ahead = along_person - ((here[0] - ax) * ux + (here[1] - ay) * uy)
         if ahead > self.approach_ahead_m:
             return '%.0f m ahead on the lane' % ahead
         return None
@@ -912,12 +918,15 @@ class VisionOps:
         """Geotagged people (the search drones', heard over the mesh, and this drone's own) that
         no other drone has claimed or served, as plan-frame [x, y]."""
         points = [t['xy'][:2] for t in self.peer_tags()] + [g['local'][:2] for g in self.engine.geotags()]
+        served = [s['xy'][:2] for s in self.swarm_list('peer_served')] + self.served_points
         out = []
         for point in points:
             if any(math.hypot(point[0] - p[0], point[1] - p[1]) < 1.0 for p in out):
                 continue
             if self.peer_claim_at(point) is not None:
-                continue  # a peer is serving (or has served) this person
+                continue  # a peer is serving this person right now
+            if any(math.hypot(point[0] - p[0], point[1] - p[1]) < self.claim_radius_m for p in served):
+                continue  # already given a package (by a peer or by this drone)
             out.append([float(point[0]), float(point[1])])
         return out
 
@@ -1050,6 +1059,8 @@ class VisionOps:
                 done = 'COMMAND_SENT_UNVERIFIED: servo commanded, delivery not sensed'
             if done:
                 self.delivered = dict(claim or {}, mission_id=engine.owner)
+                if claim:
+                    self.served_points = (self.served_points + [[round(v, 1) for v in claim['position'][:2]]])[-20:]
                 self.engine.driver.stop()
                 self.engine.driver.report(dict(kind='delivery', mission_id=engine.owner, target_id=engine.target,
                                                position=[round(v, 2) for v in (claim or {}).get('position', [])]))
@@ -1077,6 +1088,14 @@ class VisionOps:
         if not -90.0 <= pitch <= 25.0:
             raise ValueError('Gimbal pitch must be -90..25 deg')
         self.search_pitch = pitch
+        # Planned side sweep (2026-11-01): from the camera field of view, height and lane spacing;
+        # -1 / absent keeps this drone's configured sweep, 0 holds the camera still (straight down).
+        sweep = cmd.get('sweep_deg')
+        if isinstance(sweep, (int, float)) and finite(sweep) and sweep >= 0:
+            self.sweep_deg = min(60.0, float(sweep))
+            period = cmd.get('sweep_period_s')
+            if isinstance(period, (int, float)) and finite(period) and period > 0:
+                self.sweep_period_s = max(2.0, float(period))
         vision = self.vision()
         if not cmd['started']:
             self.engine.driver.vision_command(dict(cmd='set_attitude', yaw=0.0, pitch=pitch))

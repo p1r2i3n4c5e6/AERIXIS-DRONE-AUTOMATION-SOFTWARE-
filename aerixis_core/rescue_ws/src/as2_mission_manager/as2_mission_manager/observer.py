@@ -27,7 +27,7 @@ class RosObserver:
         # Compact link/vision summaries for the GCS status poll (sent over the radio).
         self.extra={};self.extra_at={}
         for key,topic in (('vision','vision/target'),('mesh','swarm/radio_health'),('swarm','swarm/status'),('fc','fc/health'),
-                          ('guardian','fc_guardian/state')):
+                          ('guardian','fc_guardian/state'),('payload','payload/status')):
             self.node.create_subscription(String,topic,lambda m,k=key:self._extra(k,m),10)
         self.subscription = self.node.create_subscription(PlatformInfo,'platform/info',self._platform,10)
         # Latched: a restarted FC guardian gets the mission's emergency action again.
@@ -59,13 +59,19 @@ class RosObserver:
             gimbal=data.get('gimbal') or {}
             data=dict(fresh=data.get('fresh'),locked=data.get('locked'),label=data.get('label'),
                       lock_state=data.get('lock_state'),suppressed=data.get('suppressed'),fps=data.get('fps'),
-                      source=data.get('source'),gimbal_yaw=gimbal.get('yaw'),gimbal_pitch=gimbal.get('pitch'))
+                      source=data.get('source'),gimbal_yaw=gimbal.get('yaw'),gimbal_pitch=gimbal.get('pitch'),
+                      hfov_deg=data.get('hfov_deg'),vfov_deg=data.get('vfov_deg'))
         elif key=='swarm':
             # Person de-confliction: who this drone and its peers are responding to.
             claims=[dict(owner=c.get('owner'),label=c.get('label')) for c in data.get('peer_claims') or [] if isinstance(c,dict)]
             data=dict(peers_fresh=data.get('peers_fresh'),separation_safe=data.get('separation_safe'),
                       required=data.get('required'),peers=data.get('peers'),
                       person_claim=(data.get('person_claim') or {}).get('label'),peer_claims=claims[:8])
+        elif key=='payload':
+            # Payload set-up and what is left (GCS plans deliveries from it; sent over the radio).
+            data=dict(capacity=data.get('capacity'),loaded=data.get('loaded'),remaining=data.get('remaining'),
+                      servos=[dict(set=s.get('set'),drops=s.get('drops')) for s in (data.get('servos') or [])[:6] if isinstance(s,dict)],
+                      truth=data.get('truth'),next=data.get('payload_id'))
         elif key=='guardian':
             emergency=data.get('emergency') or {}
             data=dict(state=data.get('state'),action=data.get('action'),detail=str(data.get('detail',''))[:80],

@@ -11,14 +11,16 @@ from std_msgs.msg import String
 def target_message(stamp, *, fresh, locked, label=None, err_x=0.0, err_y=0.0, dist_m=None,
                    conf=0.0, lock_state='SEARCHING', suppressed=False, targets_count=0,
                    fps=0.0, gimbal=None, preview_only=False, source='a8_tracker', build='',
-                   target_class=None, model=None):
-    """Compact per-frame summary consumed by the rescue runtime and the GCS link."""
+                   target_class=None, model=None, hfov_deg=None, vfov_deg=None):
+    """Compact per-frame summary consumed by the rescue runtime and the GCS link. hfov/vfov: the
+    camera's field of view, so the GCS can plan the search sweep for this camera (2026-11-01)."""
     return dict(schema_version=1, stamp=stamp, source=source, build=build, fresh=bool(fresh),
                 locked=bool(locked and fresh), label=label if locked else None,
                 err_x=float(err_x), err_y=float(err_y), dist_m=dist_m, conf=float(conf),
                 lock_state=lock_state, suppressed=bool(suppressed),
                 targets_count=int(targets_count), fps=float(fps), gimbal=gimbal,
-                preview_only=bool(preview_only), target_class=target_class, model=model)
+                preview_only=bool(preview_only), target_class=target_class, model=model,
+                hfov_deg=hfov_deg, vfov_deg=vfov_deg)
 
 
 def gimbal_state(target, gimbal_max_age_s=0.5):

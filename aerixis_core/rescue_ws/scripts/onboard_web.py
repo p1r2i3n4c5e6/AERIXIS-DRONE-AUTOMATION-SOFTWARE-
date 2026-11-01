@@ -374,6 +374,14 @@ def make_handler(port_info):
                     stored = json.loads(links.CONFIG_FILE.read_text())
                 except (OSError, ValueError):
                     stored = {}
+                try:
+                    if 'payload_servos' in changes or 'aux_set' in changes:
+                        links.payload_servos(changes.get('payload_servos', ''), changes.get('aux_set', 0) or 0)
+                    for key in ('payload_hold', 'aux_value'):
+                        if key in changes and not -1 <= float(changes[key]) <= 1:
+                            raise ValueError('{} must be -1..1'.format(key))
+                except (ValueError, TypeError) as exc:
+                    return self.reply({'error': str(exc)}, 400)
                 for key, value in changes.items():
                     if isinstance(links.DEFAULTS[key], bool):
                         value = bool(value)
@@ -484,6 +492,7 @@ background:linear-gradient(165deg,color-mix(in srgb,var(--c) 15%,transparent),tr
 .card:before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--c),transparent)}
 .card h3{display:flex;align-items:center;gap:8px;margin:0;padding:13px 15px 4px;font-size:12px;letter-spacing:.07em;text-transform:uppercase;color:color-mix(in srgb,var(--c) 45%,#fff)}
 .card h3 .dot{margin-left:auto}.body{padding:6px 15px 15px}.wide{grid-column:1/-1}
+.prow{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin:6px 0;padding:8px 10px;border-radius:10px;border:1px solid color-mix(in srgb,var(--c,#f0a12c) 30%,transparent)}.prow label{display:flex;flex-direction:column;gap:4px;font-size:12px}.prow select,.prow input{min-width:90px}
 .c-violet{--c:#9b6cf6}.c-amber{--c:#f0a12c}.c-pink{--c:#ec5fa0}.c-teal{--c:#16a596}.c-green{--c:#22b07d}.c-cyan{--c:#22b5c9}.c-coral{--c:#f27a5e}.c-lime{--c:#8bd450}.c-blue{--c:#4f8df7}
 /* widgets */
 label{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--muted);font-weight:600}
@@ -663,8 +672,18 @@ Input 16:9 (e.g. 384,640) matches the 640x360 video: no padding, more pixels per
 <label class="sw">Allow flight<small>Off = observe only</small><span class="toggle"><input type="checkbox" data-k="allow_flight" data-bool><span></span></span></label>
 <label class="sw">Paths verified clear<small>Required for automatic routes</small><span class="toggle"><input type="checkbox" data-k="path_clear" data-bool><span></span></span></label>
 <div class="fields"><label>Emergency action<select data-k="emergency_action"><option>RTL</option><option>LAND</option></select></label>
-<label>Payload AUX (0 = none)<input data-k="aux_set"></label><label>Min separation (m)<input data-k="separation_m"></label></div>
-<div class="row"><button class="b primary" onclick="save(['allow_flight','path_clear','emergency_action','aux_set','separation_m'],['as2','manager','guardian'])">Save &amp; apply</button></div></div></div>
+<label>Min separation (m)<input data-k="separation_m"></label></div>
+<div class="row"><button class="b primary" onclick="save(['allow_flight','path_clear','emergency_action','separation_m'],['as2','manager','guardian'])">Save &amp; apply</button></div></div></div>
+<div class="card c-amber"><h3>Payload drop</h3><div class="body">
+<div class="note">Each servo: the PX4 <b>Offboard Actuator Set</b> it is mapped to (1&ndash;6) and how many packages it drops, one per step. A servo with N drops moves evenly from the hold value to the release end, one step per drop; a servo with 1 drop goes straight to the release end. Drops go servo by servo. The GCS reads this set-up when the drone connects and plans deliveries with it.</div>
+<input type="hidden" data-k="payload_servos" id="pservos"><input type="hidden" data-k="aux_set" id="paux">
+<div id="pservolist" class="pservos"></div>
+<div class="row"><button class="b" onclick="addServo()">+ Add servo</button><span id="pcap" class="note" style="margin:0"></span></div>
+<div class="fields"><label>Hold value (-1..1)<input data-k="payload_hold"></label><label>Release end value (-1..1)<input data-k="aux_value"></label>
+<label>Drop height min (m)<input data-k="drop_min_agl"></label><label>Drop height max (m)<input data-k="drop_max_agl"></label></div>
+<label class="sw">Operator confirms the loaded packages<small>At upload in the GCS (no load sensor fitted)</small><span class="toggle"><input type="checkbox" data-k="operator_payload" data-bool><span></span></span></label>
+<label class="sw">Overhead drop envelope verified<small>Drop height window tested with an inert package, props off</small><span class="toggle"><input type="checkbox" data-k="overhead_verified" data-bool><span></span></span></label>
+<div class="row"><button class="b primary" onclick="save(['payload_servos','aux_set','payload_hold','aux_value','drop_min_agl','drop_max_agl','operator_payload','overhead_verified'],['as2','manager','guardian'])">Save &amp; apply</button></div></div></div>
 <div class="card c-violet"><h3>Panel PIN</h3><div class="body"><div class="fields">
 <label>New PIN<input id="newpin" type="password" autocomplete="new-password"></label><label>Repeat<input id="newpin2" type="password" autocomplete="new-password"></label></div>
 <div class="row"><button class="b primary" onclick="changePin()">Change PIN</button></div></div></div>
@@ -695,6 +714,17 @@ function showRules(){$$('[data-show]').forEach(el=>{const[k,vs]=el.dataset.show.
 $$('input[data-k],select[data-k]').forEach(el=>el.addEventListener('input',()=>dirty.add(el.dataset.k)));
 $$('select.bauds').forEach(sel=>sel.innerHTML=BAUDS.map(b=>`<option>${b}</option>`).join(''));
 function val(el){if(el.classList.contains('seg'))return el.value;if(el.dataset.bool!==undefined)return el.type==='checkbox'?el.checked:el.value==='true';return el.value}
+// Payload servos (2026-11-01): rows of actuator set + drops, kept in the hidden payload_servos.
+function servoRows(){const spec=($('#pservos').value||'').trim();if(spec)return spec.split(',').filter(Boolean).map(p=>{const [a,n]=p.split(':');return {set:+a,drops:+(n||1)}});
+ const aux=+($('#paux').value||0);return aux>=1&&aux<=6?[{set:aux,drops:1}]:[]}
+function writeServos(rows){$('#pservos').value=rows.map(r=>r.set+':'+r.drops).join(',');$('#paux').value='0';dirty.add('payload_servos');dirty.add('aux_set');renderServos()}
+function addServo(){const rows=servoRows();const free=[1,2,3,4,5,6].find(n=>!rows.some(r=>r.set===n));if(!free)return toast('All six actuator sets are in use',1);rows.push({set:free,drops:1});writeServos(rows)}
+function renderServos(){const rows=servoRows(),box=$('#pservolist');if(!box)return;
+ box.innerHTML=rows.length?rows.map((r,i)=>`<div class="prow"><label>Servo ${i+1} · actuator set<select data-i="${i}" class="pset">${[1,2,3,4,5,6].map(n=>`<option ${n===r.set?'selected':''}>${n}</option>`).join('')}</select></label><label>Drops<input data-i="${i}" class="pdrops" type="number" min="1" max="20" value="${r.drops}"></label><button class="b" data-i="${i}" onclick="delServo(${i})">Remove</button></div>`).join(''):'<div class="note">No payload servo: this drone carries no packages.</div>';
+ const total=rows.reduce((a,r)=>a+r.drops,0);$('#pcap').textContent=total?`Capacity: ${total} package${total>1?'s':''} on ${rows.length} servo${rows.length>1?'s':''}`:'';
+ box.querySelectorAll('.pset').forEach(el=>el.onchange=()=>{const rs=servoRows();rs[+el.dataset.i].set=+el.value;writeServos(rs)});
+ box.querySelectorAll('.pdrops').forEach(el=>el.onchange=()=>{const rs=servoRows();rs[+el.dataset.i].drops=Math.max(1,Math.min(20,Math.round(+el.value||1)));writeServos(rs)})}
+function delServo(i){const rows=servoRows();rows.splice(i,1);writeServos(rows)}
 function fill(){const s=S.settings,locked=new Set(S.locked);
  $$('select.ports').forEach(sel=>{const k=sel.dataset.k,cur=s[k]||'';const opts=(sel.dataset.empty?[['',sel.dataset.empty]]:[]).concat(S.ports.map(p=>[p.path,p.name+(p.device!==p.path?' → '+p.device.replace('/dev/',''):'')]));
   if(cur&&!opts.some(o=>o[0]===cur))opts.push([cur,cur+' (not plugged in)']);if(dirty.has(k))return;
@@ -703,7 +733,7 @@ function fill(){const s=S.settings,locked=new Set(S.locked);
  $$('[data-k]').forEach(el=>{const k=el.dataset.k;const lock=locked.has(k);el.title=lock?'Fixed by AS2_'+k.toUpperCase()+' in onboard.env':'';
   if(el.classList.contains('seg')){el.classList.toggle('dis',lock);if(!dirty.has(k)){el.value=String(s[k]??'');paintSeg(el)}return}
   el.disabled=lock;if(dirty.has(k))return;let v=s[k];
-  if(el.type==='checkbox')el.checked=!!v&&v!=='false';else{if(el.dataset.bool!==undefined)v=String(!!v&&v!=='false');el.value=v??''}});showRules()}
+  if(el.type==='checkbox')el.checked=!!v&&v!=='false';else{if(el.dataset.bool!==undefined)v=String(!!v&&v!=='false');el.value=v??''}});showRules();renderServos()}
 const KIND={running:'ok',starting:'warn',waiting:'warn',restarting:'warn',off:''};
 const NAMES={fc:'Flight controller',guardian:'FC guardian',as2:'AERIXIS core',manager:'Mission manager',gcs:'GCS radio',mesh:'Mesh',camera:'Camera',web:'Panel'};
 function dot(id,state){const e=$(id);if(e)e.className='dot '+(state===undefined?'':(KIND[state]??'bad'))}

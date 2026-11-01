@@ -127,6 +127,16 @@ def person_claim(supervisor, now, max_age=.5):
         return None
 
 
+def recent_served(supervisor, count=3):
+    """The last few people this drone delivered a package to, as plan-frame x,y (mission 7):
+    other delivery drones never serve them again."""
+    try:
+        served = [_xy(point) for point in list(supervisor.get('served') or [])[-count:]]
+    except (AttributeError, TypeError):
+        return []
+    return [xy for xy in served if xy]
+
+
 def recent_tags(supervisor, count=4):
     """The last few people this drone's mission has dealt with, as plan-frame x,y (peers
     exclude them): geotags (missions 3/4) and people orbited/tracked to the end (``handled``)."""
@@ -154,6 +164,7 @@ class PeerPeople:
         self.max_tags = max_tags
         self.latest = {}  # owner -> (stamp, claim or None)
         self.tag_points = {}  # owner -> [[x, y, heard], ...]
+        self.served_points = {}  # owner -> [[x, y, heard], ...] people that peer delivered to
 
     def update(self, owner, value, now):
         import math
@@ -177,17 +188,18 @@ class PeerPeople:
         else:
             claim = None
         self.latest[owner] = (stamp, claim)
-        points = self.tag_points.setdefault(owner, [])
-        for tag in (value.get('tags') or [])[:8]:
-            xy = _xy(tag)
-            if not xy:
-                continue
-            same = next((p for p in points if math.hypot(p[0] - xy[0], p[1] - xy[1]) < 1.0), None)
-            if same:
-                same[2] = now
-            else:
-                points.append([xy[0], xy[1], now])
-        del points[:-self.max_tags]
+        for key, store in (('tags', self.tag_points), ('served', self.served_points)):
+            points = store.setdefault(owner, [])
+            for tag in (value.get(key) or [])[:8]:
+                xy = _xy(tag)
+                if not xy:
+                    continue
+                same = next((p for p in points if math.hypot(p[0] - xy[0], p[1] - xy[1]) < 1.0), None)
+                if same:
+                    same[2] = now
+                else:
+                    points.append([xy[0], xy[1], now])
+            del points[:-self.max_tags]
 
     def claims(self, now):
         out = []
@@ -195,6 +207,13 @@ class PeerPeople:
             if claim and 0 <= now - stamp <= self.claim_ttl:
                 out.append(dict(owner=owner, label=claim['label'], since=claim['since'],
                                 xy=claim['xy'], r=claim['r'], age_s=round(now - stamp, 2)))
+        return out
+
+    def served(self, now):
+        out = []
+        for owner, points in sorted(self.served_points.items()):
+            points[:] = [p for p in points if now - p[2] <= self.tag_ttl]
+            out.extend(dict(owner=owner, xy=[p[0], p[1]]) for p in points)
         return out
 
     def tags(self, now):
@@ -210,7 +229,7 @@ class PeerPeople:
 # serial bridge (2 frames/s) can only deliver 1 update/s and peers go stale (max age 1 s).
 # velocity: horizontal earth-frame velocity [vx, vy] for in-flight avoidance (as2_rescue_avoidance).
 _PEER_KEYS = dict(owner='o', position='p', frame_id='f', stamp='t', sigma_m='s', speed='v', claim='c', tags='g',
-                  velocity='w')
+                  velocity='w', served='d')
 _CLAIM_KEYS = dict(label='l', since='n', xy='x')
 
 

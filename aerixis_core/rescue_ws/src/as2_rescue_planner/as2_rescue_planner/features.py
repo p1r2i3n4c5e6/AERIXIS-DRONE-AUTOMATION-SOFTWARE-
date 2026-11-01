@@ -16,7 +16,7 @@ are emitted, so every tree passes the onboard registry validation without new C+
 ``custom_mission`` reproduces the built-in XML exactly (tested), so "edit a copy of mission N" in
 the GCS starts from the real mission.
 """
-from .trees import (VISION_DEFAULTS, VISION_MODES, END_ACTIONS, _coverage, _end_steps, _search_area,
+from .trees import (_sweep_ports, VISION_DEFAULTS, VISION_MODES, END_ACTIONS, _coverage, _end_steps, _search_area,
                     _takeoff_steps, _wait_for, _wrap_flight, node)
 
 MISSION_TYPES = ('coverage', 'watch', 'track')
@@ -164,7 +164,7 @@ def custom_mission(spec, points, swarm_id, segment_ids=None, speed=.5, fleet_siz
 
 def _search_pose(o):
     return node('ForceSuccess', children=[
-        node('SetGimbalSearch', pitch_deg=o['search_pitch_deg'], timeout_s=6)])
+        node('SetGimbalSearch', timeout_s=6, **_sweep_ports(o))])
 
 
 def _release(o):

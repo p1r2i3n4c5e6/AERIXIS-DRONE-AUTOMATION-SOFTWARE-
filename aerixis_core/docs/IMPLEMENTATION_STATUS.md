@@ -3,6 +3,82 @@
 What is built, what is verified, and what is still open. This file is written to be
 accurate rather than optimistic: SITL success is not flight qualification.
 
+## 2026-11-01 (round 4): several packages per drone, set on the drone's control panel
+
+User request: delivery drones carry several packages; set on the onboard computer's panel which
+servo (channel) and how many drops each servo makes; AERIXIS uses it for the drops; the GCS
+fetches each drone's payload set-up when it connects and plans with it; a delivery drone keeps
+delivering until all its packages are dropped, then RTL.
+- Drone control panel (rescue_ws/scripts/onboard_web.py, onboard_links.py): new "Payload drop"
+  card on the Drone page — servo rows (PX4 Offboard Actuator Set 1-6 + drops), live capacity,
+  hold and release-end values, drop height window, "operator confirms loaded packages" and
+  "overhead drop envelope verified" switches (both existed as settings without panel controls).
+  New settings payload_servos ("set:drops,...") and payload_hold; validated on save (set 1..6,
+  1..20 drops, no set twice, values -1..1). The single "Payload AUX" field is now the legacy
+  fallback (payload_servos empty = aux_set with one drop). write_profile passes servos/hold to
+  the payload adapter. Tested with the panel running locally on a throwaway settings folder.
+- Payload adapter (payload_node.py): `servos` + `hold_value` parameters; ordered release steps
+  servo by servo, a servo with N drops moving evenly from hold to release end; the operator's
+  loaded `count` (<= capacity) gives one package ID per drop ("<id>#k"), each its own one-shot
+  journal transaction; status reports capacity, loaded, remaining and the servo list.
+  test_payload_slots.py (6 tests).
+- Mission manager: stage accepts operator_payload.count (1..20) and writes it to
+  <mission>.payload.json; the drone status sent to the GCS now includes the payload set-up
+  (ros.links.payload: capacity, loaded, remaining, servos, truth, next).
+- Mesh: peer frames carry the people this drone delivered to ('served', wire key 'd', last 3);
+  peers keep them like geotags (30 min); AcquireTarget skips anyone served by a peer or by this
+  drone. Reset at mission change / ground reconcile.
+- Delivery tree: after each drop, ForceSuccess[KeepRunningUntilFailure[ deliver, PayloadAvailable,
+  AcquireTarget (in the air, airborne_wait_s, default 120 s) ]] -> RTL, land. Ends when the
+  packages are used up or nobody new is geotagged in time.
+- GCS: role chips show each drone's package count from its own report ("Delivery · 3 pkgs",
+  total on board); a drone reporting no servo defaults to search and cannot be a delivery
+  drone; Upload asks "How many" packages are loaded (default = the drone's capacity, refused
+  above it); new option "In the air, wait for the next person up to (s)". The simulation gives
+  each drone servos 1:1,2:2 (3 packages; SIM_PAYLOAD_SERVOS to change).
+- SITL 2+2 flights (3 packages each): search drones found 3 people; drone2 served two, drone3
+  the third, waited in the air for someone new and returned; nobody served twice. Found and
+  fixed on the way: (1) drops were counted across missions, so a reused package ID started at
+  #2 — now counted per mission (payload_node.loaded_package) and an ID used in an earlier
+  mission is refused; the Upload page suggests a fresh ID per load; (2) the ground wait of a
+  delivery drone sat inside the flight safety gate, so a start-up data gap cancelled it before
+  take-off — AcquireTarget on the ground now runs before the gate.
+- Tests: runtime 223, planner 80, mission manager 18 passed.
+
+## 2026-11-01 (round 4b): person at a lane end, camera-aware search sweep
+
+User report (screenshot): a person right at the end of a lane, near the turn, was not geotagged.
+Cause: the lane gate answered a person only once the drone was abeam; a person beyond the end
+of the leg is never abeam (the drone turns first). Now a person past the lane end counts as at
+the end (vision_ops.lane_gate; test).
+User request: sweep the gimbal according to the camera field of view (detected automatically or
+entered), so each lane covers only its own strip (e.g. 5 m lanes: 2.5 m each side).
+- Planner trees.search_sweep(altitude, spacing, speed, hfov, vfov): straight down the camera
+  sees altitude*tan(hfov/2) each side; if that covers spacing/2 (+10 %) the camera stays still,
+  otherwise it swings sideways just far enough (narrow vfov across the lane) with a period that
+  passes over every point within one footprint length. At 15 m a 65x42 deg camera already sees
+  19 m across, so lanes up to ~17 m need no sweep. Too-wide lanes for the camera make the plan
+  incomplete with a reason. The result lists cameras per drone. 5 new tests.
+- SetGimbalSearch carries sweep_deg / sweep_period_s (new BT ports in as2_behavior_tree, C++;
+  -1 = the drone's own default); the runtime applies them (test).
+- Trackers report the camera field of view in vision/target (sim 65x42; real A8 bridge
+  camera_hfov_deg/camera_vfov_deg parameters or the tracker's own value); the mission manager
+  forwards it; the GCS uses each drone's report, or the manual "Camera horizontal/vertical field
+  of view (0 = from the drone)" fields, and shows per drone after planning what the camera
+  covers ("sweeps +/-21.5 deg every 10.2 s, sees 27.5 m across (each lane must see 25 m)").
+- Delivery drone with nobody left to serve within delivery_wait_s now ends as a SUCCESS without
+  taking off (Fallback[Inverter[AcquireTarget], flight]); before, it was reported FAILURE after
+  waiting (SITL: only one person found, the other delivery drone took them).
+- Tests: runtime 223, planner 80 passed; all 2+2 trees pass the drone's upload validation with
+  the rebuilt registry (sweep ports).
+- FIXED (found in SITL, also possible on a real drone): a take-off that failed on the ground ("no
+  climb") followed by a recovery landing refused with "motion ownership unavailable: previous
+  motion still active" left the drone ARMED on the ground. ManagedLand now waits MOTION_WAIT_S
+  for the hand-back and then takes over (driver.abandon() forgets the cancelled goal, the land
+  goal is sent; AERIXIS core lands from EMERGENCY and the land behaviour disarms after
+  touchdown). Other operations still refuse a busy motion. test_land_takeover.py (2 tests);
+  runtime suite 225 passed. Not reproduced live in SITL (needs the load stall); covered by test.
+
 ## 2026-11-01 (round 3): mission 7 "Search, geotag & deliver" — 2 search + 2 delivery drones
 
 User request: two drones search and geotag; the geotags go over the mesh to the delivery drones,

@@ -1,7 +1,7 @@
 // Step 3 — Plan: mission type and its conditions -> KML area -> only that mission's options ->
 // one tree per drone, assigned straight to Upload (the trees are reviewed there).
 import { sim, arenaKml } from './simarena.js';
-import { h, icon, card, badge, hint, api, store, prefs, toast, fill, isFresh, linksOf, radioFrames, confirmDialog } from './core.js';
+import { h, icon, card, badge, hint, api, store, prefs, toast, fill, isFresh, linksOf, payloadOf, cameraOf, radioFrames, confirmDialog } from './core.js';
 import { createMap } from './mapview.js';
 import { createAreaDrawer, kmlFromPoints, polygonStats, selfIntersects, fmtArea, fmtLen } from './areadraw.js';
 import { parseXml, countNodes, loadCatalog } from './tree.js';
@@ -27,6 +27,10 @@ const O = {
   approach_speed: ['approach_speed', 'Approach speed (m/s)', 1, 0.2, 2],
   delivery_wait_s: ['delivery_wait_s', 'Delivery drones wait for a geotag up to (s)', 1500, 10, 1800],
   delivery_speed: ['delivery_speed', 'Delivery flight speed (m/s)', 1.5, 0.3, 3],
+  // Camera field of view for the straight-down search sweep: 0 = what each drone reports.
+  camera_hfov_deg: ['camera_hfov_deg', 'Camera horizontal field of view (°, 0 = from the drone)', 0, 0, 170],
+  camera_vfov_deg: ['camera_vfov_deg', 'Camera vertical field of view (°, 0 = from the drone)', 0, 0, 170],
+  airborne_wait_s: ['airborne_wait_s', 'In the air, wait for the next person up to (s)', 120, 10, 1800],
   orbit_radius_m: ['orbit_radius_m', 'Orbit radius (m)', 10, 3, 100],
   orbit_laps: ['orbit_laps', 'Orbit laps', 2, 0.25, 20],
   orbit_speed: ['orbit_speed', 'Orbit speed (m/s)', 1, 0.2, 3],
@@ -58,13 +62,13 @@ export const MISSIONS = [
     limits: ['Orbit radius 3–100 m; the circle may extend beyond the KML edge by up to the radius.', 'Orbit speed ≤ 3 m/s.',
       'Keep the radius larger than obstacles around the person (trees, poles).'] },
   { id: 'human_geotag_resume', n: 3, title: 'Geotag & resume', ic: 'pin', summary: 'Survey; fly overhead each person, geotag, release the lock, resume.',
-    options: ['altitude_m', 'spacing_m', 'speed_mps', 'heading_deg', 'corridor_m', 'search_pitch_nadir', 'lost_timeout_s', 'approach_speed', 'rtl_speed'],
+    options: ['altitude_m', 'spacing_m', 'speed_mps', 'heading_deg', 'corridor_m', 'search_pitch_nadir', 'camera_hfov_deg', 'camera_vfov_deg', 'lost_timeout_s', 'approach_speed', 'rtl_speed'],
     requires: [...VISION_REQ, GNSS_REQ],
     does: ['Flies survey lanes inside the KML area.', 'For each new person inside the area: approaches until the gimbal looks straight down, records latitude/longitude.',
       'Releases the lock, looks away, resumes the lane from the interruption point.', 'People within 6 m of an earlier geotag are not tagged twice.'],
     limits: ['Geotag accuracy depends on GNSS quality and flat ground (shown as ± metres).'] },
   { id: 'human_geotag_drop_resume', n: 4, title: 'Geotag + drop', ic: 'gift', summary: 'Mission 3 plus one payload release over the first person at nadir.',
-    options: ['altitude_m', 'spacing_m', 'speed_mps', 'heading_deg', 'corridor_m', 'search_pitch_nadir', 'lost_timeout_s', 'approach_speed', 'rtl_speed'],
+    options: ['altitude_m', 'spacing_m', 'speed_mps', 'heading_deg', 'corridor_m', 'search_pitch_nadir', 'camera_hfov_deg', 'camera_vfov_deg', 'lost_timeout_s', 'approach_speed', 'rtl_speed'],
     requires: [...VISION_REQ, GNSS_REQ,
       ['flight', 'Flight allowed and overhead drop envelope verified in the aircraft profile', d => !!d.data?.flight_enabled, d => d.data?.flight_enabled ? 'yes' : 'no']],
     does: ['Everything in mission 3.', 'Over the first geotagged person: releases the payload once, only when steady and inside the drop height window.',
@@ -76,7 +80,7 @@ export const MISSIONS = [
     // Planned as a custom mission: every drone searches and geotags; the chosen drones also orbit.
     features: { camera: true, payload: false, type: 'coverage', detect: true, geotag: true, orbit: false, drop: false, resume: true, finish: 'RTL', emergency: 'RTL' },
     orbitFeatures: { camera: true, payload: false, type: 'coverage', detect: true, geotag: true, orbit: true, drop: false, resume: true, finish: 'RTL', emergency: 'RTL' },
-    options: ['altitude_m', 'spacing_m', 'speed_mps', 'heading_deg', 'corridor_m', 'search_pitch_nadir', 'lost_timeout_s', 'approach_speed', 'orbit_radius_m', 'orbit_laps', 'orbit_speed', 'rtl_speed'],
+    options: ['altitude_m', 'spacing_m', 'speed_mps', 'heading_deg', 'corridor_m', 'search_pitch_nadir', 'camera_hfov_deg', 'camera_vfov_deg', 'lost_timeout_s', 'approach_speed', 'orbit_radius_m', 'orbit_laps', 'orbit_speed', 'rtl_speed'],
     requires: [...VISION_REQ, GNSS_REQ],
     does: ['No Generate step: as soon as the area is set (file, drawn, or the arena) and the conditions are accepted, the lanes are planned and assigned automatically.',
       'Every aircraft flies its share of the area, camera straight down and sweeping sideways.',
@@ -89,17 +93,19 @@ export const MISSIONS = [
   { id: 'search_deliver', n: 7, title: 'Search, geotag & deliver', ic: 'gift', auto: true, roleChoice: true, delivers: true,
     summary: 'Search drones geotag people; delivery drones get the geotags over the mesh, split them and drop a package to each.',
     features: { camera: true, payload: false, type: 'coverage', detect: true, geotag: true, orbit: false, drop: false, resume: true, finish: 'RTL', emergency: 'RTL' },
-    options: ['altitude_m', 'spacing_m', 'speed_mps', 'heading_deg', 'corridor_m', 'search_pitch_nadir', 'lost_timeout_s', 'approach_speed', 'delivery_wait_s', 'delivery_speed', 'rtl_speed'],
+    options: ['altitude_m', 'spacing_m', 'speed_mps', 'heading_deg', 'corridor_m', 'search_pitch_nadir', 'camera_hfov_deg', 'camera_vfov_deg', 'lost_timeout_s', 'approach_speed', 'delivery_wait_s', 'delivery_speed', 'airborne_wait_s', 'rtl_speed'],
     requires: [...VISION_REQ, GNSS_REQ],
     does: ['No Generate step: set the area, accept the conditions and choose each aircraft\'s role — it plans and assigns by itself.',
       'Search drones share the area, camera straight down and sweeping sideways, and geotag every person beside their lanes (as mission 3).',
       'Every geotag goes over the drone mesh to the delivery drones.',
       'Delivery drones wait on the ground. Each claims the nearest geotagged person nobody else serves — two delivery drones never take the same person; if one takes person A, the other takes person B.',
-      'The delivery drone takes off, flies over the person at mission height, holds steady, releases its package once, returns and lands.'],
-    limits: ['One package per delivery drone; people within 8 m of each other count as one target.',
+      'The delivery drone takes off, flies over the person at mission height, holds steady and releases one package.',
+      'With packages left it takes the next person nobody serves (waiting in the air up to the set time for new geotags); when all its packages are dropped — or nobody new is found — it returns and lands.',
+      'Each drone\'s package count comes from its own control panel (servos and drops), fetched when it connects.'],
+    limits: ['People within 8 m of each other count as one target.',
       'The drop is over the geotag position (no camera check at the drop): accuracy is the geotag\'s (± metres shown).',
       'Drop height must be inside the drop window of the aircraft profile; the package must be safe to drop.',
-      'Operator must confirm each delivery drone\'s package at upload (servo command does not prove delivery).'] },
+      'Operator must confirm each delivery drone\'s loaded packages at upload (servo command does not prove delivery).'] },
   { id: 'swarm_coverage', n: 5, title: 'Swarm coverage', ic: 'mesh', summary: 'Every aircraft flies its share of the area. No detection.',
     options: ['altitude_m', 'spacing_m', 'speed_mps', 'heading_deg', 'corridor_m', 'rtl_speed'],
     requires: [],
@@ -113,7 +119,7 @@ const PAYLOAD_REQ = ['flight', 'Flight allowed and overhead drop envelope verifi
 export function optionsFor(f) {
   const o = ['altitude_m'];
   if (f.type === 'watch') o.push('transit_mps', 'search_time_s', 'scan_rate_dps'); else o.push('spacing_m', 'speed_mps', 'heading_deg', 'corridor_m');
-  if (f.detect) o.push(f.geotag ? 'search_pitch_nadir' : 'search_pitch_deg', 'lost_timeout_s');
+  if (f.detect) o.push(...(f.geotag ? ['search_pitch_nadir', 'camera_hfov_deg', 'camera_vfov_deg'] : ['search_pitch_deg']), 'lost_timeout_s');
   if (f.type === 'track') o.push('track_duration_s');
   if (f.geotag) o.push('approach_speed');
   if (f.orbit) o.push('orbit_radius_m', 'orbit_laps', 'orbit_speed');
@@ -345,14 +351,26 @@ export const page = {
     const chosen = prefs.get('orbitDrones', []) || [];
     return drones.map(d => d.drone_id).filter(id => chosen.includes(id));
   },
+  /** Camera field of view for this drone's search sweep: the manual value, else its report. */
+  cameraEntry(d) {
+    const val = name => +([...this.optionBox.querySelectorAll('input')].find(i => i.dataset.key === name)?.value || 0);
+    const cam = cameraOf(d), hfov = val('camera_hfov_deg') || cam?.hfov, vfov = val('camera_vfov_deg') || cam?.vfov;
+    return hfov && vfov ? { camera_hfov_deg: hfov, camera_vfov_deg: vfov } : {};
+  },
   // Mission 7: role of each aircraft ('search' | 'delivery'); default first half search.
   droneRoles(drones = store.fleet.filter(isFresh)) {
     const saved = prefs.get('droneRoles', {}) || {}, half = Math.ceil(drones.length / 2);
-    return Object.fromEntries(drones.map((d, i) => [d.drone_id, saved[d.drone_id] || (i < half ? 'search' : 'delivery')]));
+    // Default: a drone that reports no payload servo searches; otherwise first half search.
+    return Object.fromEntries(drones.map((d, i) => [d.drone_id, saved[d.drone_id]
+      || (payloadOf(d) && !payloadOf(d).capacity ? 'search' : i < half ? 'search' : 'delivery')]));
   },
   rolesValid(roles) {
     const v = Object.values(roles);
-    return v.includes('search') && v.includes('delivery');
+    return v.includes('search') && v.includes('delivery') && !this.emptyDeliverers(roles).length;
+  },
+  /** Delivery drones that report no payload servo (cannot deliver anything). */
+  emptyDeliverers(roles) {
+    return store.fleet.filter(d => roles[d.drone_id] === 'delivery' && payloadOf(d) && !payloadOf(d).capacity).map(d => d.label);
   },
   renderRoles(drones) {
     const roles = this.droneRoles(drones);
@@ -361,13 +379,20 @@ export const page = {
       h('div', { class: 'kicker' }, 'Role of each aircraft'),
       h('div', { class: 'orbit-list' }, ...drones.map(d => {
         const role = roles[d.drone_id];
-        return h('button', { class: 'orbit-chip role-chip on ' + role, title: 'Click to switch between search and delivery',
+        const pay = payloadOf(d), packages = pay ? ` · ${pay.capacity} pkg${pay.capacity === 1 ? '' : 's'}` : '';
+        return h('button', { class: 'orbit-chip role-chip on ' + role, title: pay ? `Payload set-up on the drone: ${pay.servos.map(s => `set ${s.set} × ${s.drops}`).join(', ') || 'none'}. Click to switch between search and delivery.` : 'Click to switch between search and delivery',
           onclick: () => { prefs.set('droneRoles', { ...(prefs.get('droneRoles', {}) || {}), [d.drone_id]: role === 'search' ? 'delivery' : 'search' });
             this.orbitBox.classList.remove('ask'); this.renderOrbit(); this.autoPlan(); } },
-          h('span', { html: icon(role === 'search' ? 'pin' : 'gift') }), `${d.label} · ${role === 'search' ? 'Search' : 'Delivery'}`);
+          h('span', { html: icon(role === 'search' ? 'pin' : 'gift') }), `${d.label} · ${role === 'search' ? 'Search' : 'Delivery' + packages}`);
       })),
-      h('small', { class: 'faint' }, this.rolesValid(roles) ? `${n('search')} search, ${n('delivery')} delivery. Click an aircraft to switch its role.`
-        : drones.length < 2 ? 'Mission 7 needs at least two aircraft (one searches, one delivers).' : 'Needs at least one search drone and one delivery drone.')]);
+      (() => {
+        const empty = this.emptyDeliverers(roles);
+        const total = drones.filter(d => roles[d.drone_id] === 'delivery').reduce((a, d) => a + (payloadOf(d)?.capacity || 0), 0);
+        return h('small', { class: empty.length ? '' : 'faint', style: empty.length ? { color: '#e5484d' } : {} },
+          empty.length ? `${empty.join(', ')} report no payload servo — make them search, or set a servo on their control panel.`
+            : this.rolesValid(roles) ? `${n('search')} search, ${n('delivery')} delivery${total ? ` · ${total} packages on board` : ''}. Click an aircraft to switch its role.`
+              : drones.length < 2 ? 'Mission 7 needs at least two aircraft (one searches, one delivers).' : 'Needs at least one search drone and one delivery drone.');
+      })()]);
   },
   renderOrbit() {
     if (!this.orbitBox) return;
@@ -499,12 +524,12 @@ export const page = {
     if (m.orbitChoice && !preview && !orbiters.length) { this.askOrbit(); return toast('Choose the orbit drones', 'Tick which aircraft may orbit a person (the others geotag and keep searching).', 'warn', 9000); }
     // Mission 7: each aircraft searches or delivers; at least one of each.
     const roles = m.roleChoice ? this.droneRoles(drones) : null;
-    if (roles && !preview && !this.rolesValid(roles)) { this.askOrbit(); return toast('Choose the roles', 'Mission 7 needs at least one search drone and one delivery drone.', 'warn', 9000); }
+    if (roles && !preview && !this.rolesValid(roles)) { this.askOrbit(); return toast('Choose the roles', this.emptyDeliverers(roles).length ? `${this.emptyDeliverers(roles).join(', ')} carry no packages: make them search.` : 'Mission 7 needs at least one search drone and one delivery drone.', 'warn', 9000); }
     const request = { mission_id: crypto.randomUUID().replaceAll('-', ''), template: m.custom || m.features ? 'custom' : m.id, kml: this.kmlText, payload_confirmation: 'operator',
       emergency_action: emergencyAction(), ...(m.custom || m.features ? { features: m.features } : {}),
       fleet: drones.map(d => ({ drone_id: d.drone_id, endurance_s: (+this.inputs['endurance.' + d.drone_id]?.value || 20) * 60, reserve_fraction: .25, coverage: true,
         ...(orbiters?.includes(d.drone_id) ? { features: m.orbitFeatures } : {}),
-        ...(roles ? { role: roles[d.drone_id] } : {}) })) };
+        ...(roles ? { role: roles[d.drone_id] } : {}), ...this.cameraEntry(d) })) };
     for (const input of this.optionBox.querySelectorAll('input')) {
       const v = +input.value, min = +input.min, max = +input.max;
       if (!isFinite(v) || v < min || v > max) return toast('Parameter out of range', `${input.closest('label').firstChild.textContent}: ${min} … ${max}`, 'bad');
@@ -532,7 +557,9 @@ export const page = {
       }));
       fill(this.result, [h('table', { class: 'table', style: { marginTop: '10px' } },
         h('thead', {}, h('tr', {}, ...['Aircraft', 'Route', 'Nodes', 'XML', 'Radio upload', 'Flight'].map(x => h('th', {}, x)))), h('tbody', {}, ...rows)),
-        h('div', { class: 'faint', style: { fontSize: '11.5px', marginTop: '6px' } }, `Common origin ${plan.origin.latitude.toFixed(7)}, ${plan.origin.longitude.toFixed(7)} — applied onboard automatically.`)]);
+        h('div', { class: 'faint', style: { fontSize: '11.5px', marginTop: '6px' } }, `Common origin ${plan.origin.latitude.toFixed(7)}, ${plan.origin.longitude.toFixed(7)} — applied onboard automatically.`),
+        ...Object.entries(plan.cameras || {}).map(([id, c]) => h('div', { class: 'faint', style: { fontSize: '11.5px', marginTop: '4px' } },
+          `${id} camera ${c.hfov_deg}°×${c.vfov_deg}°: ${c.sweep_deg > 0 ? `sweeps ±${c.sweep_deg}° every ${c.period_s} s, sees ${c.swath_m} m across` : `straight down, sees ${c.nadir_swath_m} m across — no sweep needed`} (each lane must see ${(+request.spacing_m || 10).toFixed(0)} m).`))]);
       this.toUpload.disabled = false; this.done = true;
       const roleText = roles ? ` · delivery: ${Object.keys(roles).filter(id => roles[id] === 'delivery').join(', ')}` : '';
       toast(m.auto ? 'Planned automatically' : 'Trees assigned', `${plan.bundles.length} aircraft${orbiters ? ` · orbit: ${orbiters.length ? orbiters.join(', ') : 'none'}` : ''}${roleText}. Review and upload them in step 4.`, 'ok');
@@ -553,5 +580,8 @@ export const page = {
     const arena = store.mode === 'sim' ? sim.arena : null;
     this.map?.showArena(arena); this.arenaBtn.style.display = arena ? '' : 'none';
     const now = Date.now(); if (now - (this.termsAt || 0) > 2000) { this.termsAt = now; this.renderTerms(); }
+    // Payload set-ups arrive with the drones' status (missions 6/7 chips): redraw when they change.
+    const key = s.fleet.filter(isFresh).map(d => `${d.drone_id}:${payloadOf(d)?.capacity ?? '-'}`).join(',');
+    if (key !== this.payloadKey) { this.payloadKey = key; this.renderOrbit(); }
   },
 };

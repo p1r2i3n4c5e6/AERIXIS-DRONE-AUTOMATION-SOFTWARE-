@@ -35,7 +35,10 @@ class TrackerBridge(Node):
                             # the others feed status, logs and the geolocator, which need ~10 Hz.
                             # Every frame on all four woke several Python nodes 23x/s each and
                             # took detector CPU (Pi 5, 2026-10-25). Lock changes go out at once.
-                            ('aux_topics_hz', 10.0)]:
+                            ('aux_topics_hz', 10.0),
+                            # Camera field of view reported to the GCS (search sweep planning);
+                            # the tracker's own value wins when its telemetry carries one.
+                            ('camera_hfov_deg', 65.0), ('camera_vfov_deg', 42.0)]:
             self.declare_parameter(name, value)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -117,7 +120,9 @@ class TrackerBridge(Node):
             lock_state=lock_state, suppressed=packet.get('suppressed', False),
             targets_count=packet.get('targets_count', 0), fps=packet.get('fps', 0.0),
             gimbal=gimbal, preview_only=packet.get('preview_only', False),
-            build=packet.get('build', ''), target_class=target_class, model=packet.get('model'))
+            build=packet.get('build', ''), target_class=target_class, model=packet.get('model'),
+            hfov_deg=float(packet.get('hfov_deg') or self.get_parameter('camera_hfov_deg').value),
+            vfov_deg=float(packet.get('vfov_deg') or self.get_parameter('camera_vfov_deg').value))
         gimbal_value = gimbal_state(target, self.get_parameter('gimbal_max_age_s').value)
         tracks_value = tracks(target, self.get_clock().now().nanoseconds)
         self.frame_pub.publish(as_string(frame_message(target, gimbal_value, tracks_value)))

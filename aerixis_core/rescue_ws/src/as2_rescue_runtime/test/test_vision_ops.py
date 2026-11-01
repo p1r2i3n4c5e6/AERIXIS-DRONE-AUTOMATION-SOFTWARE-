@@ -510,6 +510,14 @@ class EngineVisionTests(unittest.TestCase):
         self.assertTrue(self.engine.vision.human_detected())
         self.assertIsNone(self.engine.vision.deferred)
 
+    def test_person_beyond_the_lane_end_counts_once_the_drone_reaches_the_end(self):
+        # A person just past the end of the lane (at the turn): abeam can never happen.
+        self.on_leg((0, 0, 10), (20, 0, 10))
+        self.put(position=(10, 0, 10), pitch=-45.0)              # person ~20 m on, 10 m past the end
+        self.assertFalse(self.engine.vision.human_detected())
+        self.step(); self.put(position=(19, 0, 10), pitch=-65.0)  # at the lane end, person ~4.7 m on
+        self.assertTrue(self.engine.vision.human_detected())
+
     def test_person_beside_the_lane_is_a_detection_at_once(self):
         self.on_leg((0, 0, 10), (50, 0, 10))
         self.put(position=(10, 0, 10), pitch=-60.0, gyaw=90.0)    # looking sideways, abeam
@@ -559,6 +567,18 @@ class EngineVisionTests(unittest.TestCase):
         self.assertLessEqual(min(c['pitch'] for c in sent), -89.0)  # through straight down
         self.assertGreaterEqual(min(abs(c['pitch']) for c in sent), 60.0 - 1.0)  # at most 30 deg off vertical
         self.assertLessEqual(len(sent), 4 * 8 + 1)                 # rate-limited (<= 4/s)
+
+    def test_planned_sweep_from_the_mission_overrides_the_default(self):
+        v = self.engine.vision
+        self.put(pitch=-90.0, locked=False)
+        self.command('SetGimbalSearch', pitch_deg=-90.0, sweep_deg=0.0, sweep_period_s=8.0)
+        self.engine.tick()
+        self.assertEqual(v.sweep_deg, 0.0)
+        self.assertFalse(v.sweeping())                            # narrow lanes: camera stays still
+        self.step(); self.put(pitch=-90.0, locked=False)
+        self.command('SetGimbalSearch', pitch_deg=-90.0, sweep_deg=18.5, sweep_period_s=6.0)
+        self.engine.tick()
+        self.assertEqual((v.sweep_deg, v.sweep_period_s), (18.5, 6.0))
 
     def test_no_sweep_while_a_person_is_locked_or_with_a_forward_search(self):
         v = self.engine.vision

@@ -218,7 +218,7 @@ def plan_roles(roles, **kw):
 
 
 def test_delivery_drones_get_no_lanes_and_a_delivery_tree():
-    result = plan_roles(['search', 'search', 'delivery', 'delivery'], delivery_wait_s=900, delivery_speed=2)
+    result = plan_roles(['search', 'search', 'delivery', 'delivery'], delivery_wait_s=900, delivery_speed=2, airborne_wait_s=60)
     assert result['complete'], result['reason']
     assert result['delivery'] == ['drone2', 'drone3']
     by_id = {b['drone_id']: b for b in result['bundles']}
@@ -229,8 +229,17 @@ def test_delivery_drones_get_no_lanes_and_a_delivery_tree():
         assert tags.index('AcquireTarget') < tags.index('Arm') < tags.index('FlyToTarget') < tags.index('DropAtTarget')
         assert 'SurveyWaypoint' not in tags and 'HumanDetected' not in tags
         assert 'PeersFresh' in tags and 'RecoverThenFail' in tags and 'ReturnToLaunch' in tags
-        acquire = next(ET.fromstring(result['xml'][d]).iter('AcquireTarget'))
-        assert float(acquire.get('timeout_s')) == 900
+        acquire = [e for e in ET.fromstring(result['xml'][d]).iter('AcquireTarget')]
+        assert [float(e.get('timeout_s')) for e in acquire] == [900, 60]      # ground wait, in-air wait
+        assert 'KeepRunningUntilFailure' in tags and 'PayloadAvailable' in tags  # until packages run out
+        # The ground wait is outside the flight safety gate (a parked data gap must not cancel it).
+        root = ET.fromstring(result['xml'][d])
+        gate = next(root.iter('SafetyGate'))
+        assert len(list(root.iter('AcquireTarget'))) == 2 and len(list(gate.iter('AcquireTarget'))) == 1
+        # Nobody to serve on the ground: no take-off, a normal end (Inverter makes it a success).
+        top = root.find('.//Fallback[@name="DeliverIfSomeoneIsLeft"]')
+        assert top is not None and top[0].tag == 'Inverter' and top[0][0].tag == 'AcquireTarget'
+        assert tags.index('DropAtTarget') < tags.index('PayloadAvailable') < tags.index('ReturnToLaunch')
         validate_route_bundle(by_id[d], d, result['xml'][d])      # what the GCS checks at staging
     for d in ('drone0', 'drone1'):
         tags = [e.tag for e in ET.fromstring(result['xml'][d]).iter()]

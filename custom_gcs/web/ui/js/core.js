@@ -248,6 +248,17 @@ export function startPolling() {
 // ---------- derived helpers used by several pages ----------
 export function rescueOf(drone) { return drone?.data?.ros?.rescue?.data || null; }
 export function linksOf(drone) { return drone?.data?.ros?.links || {}; }
+/** The drone's payload set-up as it reports it (2026-11-01): {capacity, loaded, remaining, servos,
+ *  truth}, or null when the drone does not report one (older software, or not connected yet). */
+/** The drone camera's field of view as its tracker reports it: {hfov, vfov} in degrees, or null. */
+export function cameraOf(drone) {
+  const v = linksOf(drone).vision || {};
+  return Number.isFinite(v.hfov_deg) && Number.isFinite(v.vfov_deg) ? { hfov: v.hfov_deg, vfov: v.vfov_deg } : null;
+}
+export function payloadOf(drone) {
+  const p = linksOf(drone).payload;
+  return p && Number.isFinite(p.capacity) ? p : null;
+}
 export function isFresh(drone) { return drone?.connection === 'CONNECTED' && drone?.fresh; }
 export function linkUp() { const s = store.state; return !!(s && s.pipeline?.link1_mavlink?.status === 'connected' && s.heartbeat_age < 7); }
 

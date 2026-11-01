@@ -33,7 +33,7 @@ from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
 
-from .sim_vision import image_error, look_angles, pointing_angles, step_towards
+from .sim_vision import HFOV_DEG, VFOV_DEG, image_error, look_angles, pointing_angles, step_towards
 from .vision_schema import as_string, frame_message, gimbal_state, target_message, tracks
 
 
@@ -230,7 +230,7 @@ class SimVision(Node):
                                 'SUPPRESSED' if now < self.suppressed_until else 'SEARCHING',
                                 suppressed=now < self.suppressed_until, targets_count=count,
                                 fps=1.0 / self.period, gimbal=gimbal, source='sim_vision',
-                                build='sim')
+                                build='sim', hfov_deg=HFOV_DEG, vfov_deg=VFOV_DEG)
         gimbal_value = gimbal_state(target)
         tracks_value = tracks(target, self.get_clock().now().nanoseconds)
         self.target_pub.publish(as_string(target))

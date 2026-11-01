@@ -155,7 +155,7 @@ class Engine:
                 except ValueError:pass
             if self.owner and self.owner!=mission:
                 raise ValueError('Runtime belongs to another mission; reconcile/restart on the ground before reassignment')
-        if self.owner!=mission:self.vision.search_area=None;self.vision.release_claim();self.vision.yielded=None;self.vision.handled_points=[]
+        if self.owner!=mission:self.vision.search_area=None;self.vision.release_claim();self.vision.yielded=None;self.vision.handled_points=[];self.vision.served_points=[];self.vision.delivered=None
         if command['operation']!='ScanArea':self.vision.watch=None  # a stopped-short station leg hands its note to ScanArea
         if command['operation'] in ('ReturnToLaunch','ManagedLand','RequestRecovery'):self.vision.release_claim()
         self.owner=mission
@@ -238,7 +238,15 @@ class Engine:
                         # handing back to HOVER: wait for it instead of failing the landing.
                         self.driver.stop();cmd.setdefault('motion_wait',now)
                         if now-cmd['motion_wait']<MOTION_WAIT_S:return None
-                        raise ValueError('Motion ownership unavailable: previous motion still active')
+                        if op=='ManagedLand' and hasattr(self.driver,'abandon'):
+                            # Landing is the last safety step (2026-11-01): a take-off cancelled on
+                            # the ground did not hand back within MOTION_WAIT_S on a loaded computer,
+                            # the landing was refused and the drone stayed ARMED on the ground. Its
+                            # cancel is already sent: forget it here and land anyway (AERIXIS core
+                            # lands from EMERGENCY; the land behaviour disarms after touchdown).
+                            self.driver.abandon()
+                        else:
+                            raise ValueError('Motion ownership unavailable: previous motion still active')
                     self.journal.mark_flight_authority(self.owner)
                     self.driver.vertical(op,height,speed);cmd['started']=True;cmd['vertical_at']=now
                 elif op=='ManagedTakeoff' and self.home:
@@ -435,5 +443,5 @@ class Engine:
         self.owner=None;self.target=None;self.swarm_id='';self.last_segment=''
         self.last_release=None;self.incident_track=None;self.handled.clear();self.results.clear()
         self.handled_labels.clear();self.incident_label=None;self.home=None;self.leg=None;self.last_goal=None;self.vision.search_area=None
-        self.vision.handled_points=[];self.vision.watch=None;self.mode_change=None;self.external=False;self.offboard_seen=False
+        self.vision.handled_points=[];self.vision.served_points=[];self.vision.delivered=None;self.vision.watch=None;self.mode_change=None;self.external=False;self.offboard_seen=False
         self.vision.release_claim();self.vision.yielded=None

@@ -176,6 +176,11 @@ class RosDriver:
             else:self.speed_acked=True
         if self.hover_future is not None and self.hover_future.done():
             self.hover_ok=bool(self.hover_future.result().success);self.hover_future=None
+    def abandon(self):
+        """Forget a motion that never handed back after its cancel was sent (ManagedLand takes
+        over). The action server still finishes the old goal; its late result is ignored."""
+        self.sending=None;self.goal=None;self.result=None;self.cancel_future=None
+        self.velocity_active=False;self.hover_future=None;self.stopping=False;self.outcome=None
     def stop(self):
         if not self.stopping:self.hover_ok=False
         if self.velocity_active:self.speed_acked=False   # the next velocity motion switches again
@@ -449,7 +454,7 @@ class RescueRuntime(Node):
                 geotags=self.engine.geotags()[-10:],home=self.engine.home,
                 incident_label=self.engine.incident_label,handled_labels=sorted(self.engine.handled_labels),
                 claim=self.engine.vision.claim_state(),yielded=self.engine.vision.yielded,
-                handled=self.engine.vision.handled_points[-10:],watch=self.engine.vision.watch,
+                handled=self.engine.vision.handled_points[-10:],served=self.engine.vision.served_points[-10:],watch=self.engine.vision.watch,
                 hold=self.response_hold(),avoidance=self.engine.avoidance.status,waiting=self.engine.waiting,
                 mode_change=self.engine.mode_change,external_mode=self.engine.external)
             note=(self.engine.vision.watch or {}).get('note')

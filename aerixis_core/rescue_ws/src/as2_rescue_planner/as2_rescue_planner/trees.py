@@ -9,6 +9,7 @@ The trees describe control flow only. Every physical operation stays guarded by
 the runtime's own interlocks; generating a tree never arms, moves or releases
 anything.
 """
+import math
 import xml.etree.ElementTree as ET
 
 MODES = ('waypoints', 'surveillance', 'search_geotag', 'rescue_delivery',
@@ -26,7 +27,34 @@ VISION_MODES = {
 VISION_DEFAULTS = dict(search_pitch_deg=-45.0, lost_timeout_s=3.0, track_duration_s=0.0,
                        orbit_radius_m=10.0, orbit_laps=2.0, orbit_speed=1.0,
                        approach_speed=1.0, rtl_speed=2.0, suppress_s=8.0, mesh_wait_s=30.0,
-                       search_time_s=600.0, scan_rate_dps=12.0, delivery_wait_s=1500.0, delivery_speed=1.5)
+                       search_time_s=600.0, scan_rate_dps=12.0, delivery_wait_s=1500.0, delivery_speed=1.5,
+                       airborne_wait_s=120.0, sweep_deg=-1.0, sweep_period_s=0.0)
+
+
+def search_sweep(altitude_m, spacing_m, speed_mps, hfov_deg=65.0, vfov_deg=42.0, overlap=1.1):
+    """Gimbal side sweep so each lane sees its own strip of the area (2026-11-01).
+
+    A lane must see spacing/2 to each side (times `overlap`). Straight down the camera already
+    sees altitude * tan(hfov/2) to each side (the image's wide axis is across the lane while the
+    nose follows the lane); if that is enough the camera stays still (sweep 0). Otherwise it
+    swings sideways (the narrow vfov is then across the lane) just far enough that the outer edge
+    reaches the strip edge, and fast enough that a point beside the lane is passed over within one
+    footprint length along the lane (the wide hfov is then along it), so nothing slips through.
+    Returns dict(sweep_deg, period_s, swath_m, nadir_swath_m, covered)."""
+    h, need = float(altitude_m), float(spacing_m) / 2.0 * overlap
+    if not (h > 0 and need > 0 and 1 <= hfov_deg <= 170 and 1 <= vfov_deg <= 170 and speed_mps > 0):
+        raise ValueError('Search sweep needs altitude, spacing, speed and a camera field of view')
+    nadir = h * math.tan(math.radians(hfov_deg / 2.0))
+    if nadir >= need:
+        return dict(sweep_deg=0.0, period_s=8.0, swath_m=round(2 * nadir, 1), nadir_swath_m=round(2 * nadir, 1), covered=True)
+    tilt = math.degrees(math.atan(need / h)) - vfov_deg / 2.0
+    covered = tilt <= 60.0
+    tilt = max(2.0, min(60.0, tilt))
+    along = 2.0 * h * math.tan(math.radians(hfov_deg / 2.0))
+    period = max(4.0, min(20.0, 0.8 * along / float(speed_mps)))
+    swath = 2.0 * h * math.tan(math.radians(tilt + vfov_deg / 2.0))
+    return dict(sweep_deg=round(tilt, 1), period_s=round(period, 1), swath_m=round(swath, 1),
+                nadir_swath_m=round(2 * nadir, 1), covered=covered)
 
 
 def node(kind, children=None, **ports):
@@ -156,6 +184,14 @@ END_ACTIONS = ('RTL', 'LAND')
 LAND_TIMEOUT_S = 300
 
 
+def _sweep_ports(o):
+    """SetGimbalSearch ports: pitch, plus the planned side sweep for a straight-down search."""
+    ports = dict(pitch_deg=o['search_pitch_deg'])
+    if float(o.get('sweep_deg', -1)) >= 0 and float(o['search_pitch_deg']) <= -80:
+        ports.update(sweep_deg=o['sweep_deg'], sweep_period_s=o['sweep_period_s'])
+    return ports
+
+
 def _end_steps(action, rtl_speed):
     """How the flight ends: fly home and land (RTL) or land where the aircraft is (LAND)."""
     if action not in END_ACTIONS:
@@ -225,7 +261,7 @@ def vision_mission(mode, points, swarm_id, segment_ids=None, speed=.5, fleet_siz
         coverage = node('SafetyGate', flag='SeparationSafe', children=[
             node('SafetyGate', flag='PeersFresh', children=[coverage])])
     search_pose = node('ForceSuccess', children=[
-        node('SetGimbalSearch', pitch_deg=o['search_pitch_deg'], timeout_s=6)])
+        node('SetGimbalSearch', timeout_s=6, **_sweep_ports(o))])
     release = node('ReleaseTargetLock', suppress_s=o['suppress_s'], timeout_s=5)
 
     if mode == 'human_orbit':
@@ -308,8 +344,17 @@ def delivery_mission(height, swarm_id, fleet_size=1, emergency='RTL', finish='RT
       RecoverThenFail
         Sequence: wait VehicleHealthy -> SafetyGate(VehicleHealthy)[ lifecycle ]
         recovery: Fallback[ ReturnToLaunch -> ManagedLand , RequestRecovery (hold) ]
-      lifecycle: AcquireTarget (on the ground), Offboard, Arm, ManagedTakeoff, [mesh check],
-                 Retry x3 [ FlyToTarget, DropAtTarget ], ReturnToLaunch, ManagedLand, Disarm
+        (AcquireTarget, on the ground, runs first, outside the SafetyGate; nobody to serve within
+         delivery_wait_s ends the mission without taking off, as a success)
+      lifecycle: Offboard, Arm, ManagedTakeoff, [mesh check],
+                 ForceSuccess[ KeepRunningUntilFailure[ Sequence[
+                     Retry x3 [ FlyToTarget, DropAtTarget ],
+                     PayloadAvailable,                         # packages left on board?
+                     AcquireTarget (in the air, airborne_wait_s) ] ] ],
+                 ReturnToLaunch, ManagedLand, Disarm
+    Several packages (2026-11-01): after each drop the drone takes the next person nobody serves,
+    until its packages are used up or nobody new is geotagged within airborne_wait_s; then it
+    returns and lands.
     """
     if not swarm_id:
         raise ValueError('Common mission group ID is required')
@@ -323,15 +368,30 @@ def delivery_mission(height, swarm_id, fleet_size=1, emergency='RTL', finish='RT
     speed = float(o['delivery_speed'])
     if not 0 < speed <= 3:
         raise ValueError('Delivery speed must be in (0, 3] m/s')
-    steps = [node('AcquireTarget', timeout_s=int(wait))] + _takeoff_steps(float(height))
+    airborne = float(o['airborne_wait_s'])
+    if not 10 <= airborne <= 1800:
+        raise ValueError('In-air wait for the next person must be 10..1800 s')
+    steps = _takeoff_steps(float(height))
     if fleet_size > 1:
         steps.append(_wait_for('PeersFresh', o['mesh_wait_s'] * 1000))
     # A drop refused (not yet steady over the target) is tried again after re-centring; a release
     # already sent is never repeated (one-shot payload journal).
-    steps.append(node('RetryUntilSuccessful', num_attempts=3, children=[
+    deliver = node('RetryUntilSuccessful', num_attempts=3, children=[
         node('Sequence', name='DeliverToTarget', children=[
             node('FlyToTarget', speed=speed, timeout_s=600),
-            node('DropAtTarget', timeout_s=30)])]))
+            node('DropAtTarget', timeout_s=30)])])
+    steps.append(node('ForceSuccess', children=[node('KeepRunningUntilFailure', children=[
+        node('Sequence', name='DeliverWhilePackagesLeft', children=[
+            deliver, node('PayloadAvailable'), node('AcquireTarget', timeout_s=int(airborne))])])]))
     steps += [*_end_steps(finish, o['rtl_speed']), node('Disarm', service_name='set_arming_state')]
-    return _wrap_flight(steps, emergency, o['rtl_speed'])
+    tree = _wrap_flight(steps, emergency, o['rtl_speed'])
+    # The wait for a target is on the ground, BEFORE the flight safety gate: a short data gap
+    # while parked must not cancel it (SITL 2026-11-01: a start-up readiness blip failed a
+    # delivery drone that had not even taken off). The gate applies from take-off on.
+    # Nobody left to serve within the wait (the other delivery drones took everyone) is a normal
+    # end, not a failure: Fallback[ Inverter[AcquireTarget] -> done, no take-off ; fly ].
+    flight = tree['children'][0]
+    tree['children'][0] = node('Fallback', name='DeliverIfSomeoneIsLeft', children=[
+        node('Inverter', children=[node('AcquireTarget', timeout_s=int(wait))]), flight])
+    return tree
 

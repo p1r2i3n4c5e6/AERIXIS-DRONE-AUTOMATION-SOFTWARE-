@@ -1,5 +1,5 @@
 // Step 4 — Upload & start: send each drone its tree, validate onboard, then start it.
-import { h, icon, card, badge, hint, api, store, toast, fill, sha256, confirmDialog, emptyState, isFresh, rescueOf, radioFrames, alertBox , prefs } from './core.js';
+import { h, icon, card, badge, hint, api, store, toast, fill, sha256, confirmDialog, emptyState, isFresh, rescueOf, radioFrames, alertBox , prefs, payloadOf } from './core.js';
 import { parseXml, treeViewer, countNodes, loadCatalog } from './tree.js';
 import { readyToFly } from './page-readiness.js';
 
@@ -26,10 +26,14 @@ export const page = {
       const xml = (await f.text()).replace(/<!--[\s\S]*?-->/g, '').replace(/>\s+</g, '><').trim();
       store.assigned.set(d.drone_id, { xml, label: f.name, source: 'file' }); store.saveAssigned(); e.target.value = ''; this.update(store); } });
     ui.treeBox = h('div'); ui.tree = null;
-    ui.payloadCheck = h('input', { type: 'checkbox' }); ui.payloadId = h('input', { placeholder: 'Package ID, e.g. kit_001' });
+    ui.payloadCheck = h('input', { type: 'checkbox' }); ui.payloadId = h('input', { placeholder: 'Package ID (new for every load)', title: 'A new ID for every load: the drone refuses an ID used in an earlier mission' });
+    // Several packages per drone (2026-11-01): how many are loaded, up to what the drone reports.
+    ui.payloadCount = h('input', { type: 'number', min: 1, max: 20, step: 1, value: 1, style: { width: '80px' } });
+    ui.payloadCap = h('small', { class: 'faint' });
     ui.payload = h('div', { style: { marginTop: '12px', display: 'none' } },
-      hint('This tree releases a payload. Confirm the package is physically loaded — the servo command does not prove delivery.', 'warn'),
-      h('div', { class: 'row', style: { marginTop: '8px' } }, h('label', { class: 'check' }, ui.payloadCheck, 'Package loaded'), h('label', { class: 'field', style: { flex: 1 } }, ui.payloadId)));
+      hint('This tree releases payloads. Confirm the packages are physically loaded — the servo command does not prove delivery.', 'warn'),
+      h('div', { class: 'row', style: { marginTop: '8px' } }, h('label', { class: 'check' }, ui.payloadCheck, 'Packages loaded'),
+        h('label', { class: 'field' }, 'How many', ui.payloadCount), h('label', { class: 'field', style: { flex: 1 } }, ui.payloadId)), ui.payloadCap);
     ui.stepper = h('div', { class: 'stepper' });
     ui.status = h('div', { class: 'kv', style: { marginTop: '10px' } });
     ui.stage = h('button', { class: 'btn primary', onclick: () => this.act(d.drone_id, 'stage') }, h('span', { html: icon('upload') }), 'Upload & validate');
@@ -56,8 +60,11 @@ export const page = {
         // The mission's RTL/LAND choice for the onboard FC guardian (handed over at start).
         if (a.emergency_action) body.emergency_action = a.emergency_action;
         if (ui.payloadVisible) {
-          if (!ui.payloadCheck.checked || !ui.payloadId.value.trim()) throw new Error('Confirm the loaded package and enter its ID first.');
-          body.operator_payload = { confirmed_loaded: true, payload_id: ui.payloadId.value.trim() };
+          if (!ui.payloadCheck.checked || !ui.payloadId.value.trim()) throw new Error('Confirm the loaded packages and enter an ID first.');
+          const count = Math.round(+ui.payloadCount.value), cap = payloadOf(d)?.capacity;
+          if (!(count >= 1 && count <= 20)) throw new Error('Packages loaded: 1 to 20.');
+          if (cap != null && count > cap) throw new Error(`${d.label} has servo steps for ${cap} package${cap === 1 ? '' : 's'} (set on the drone's control panel).`);
+          body.operator_payload = { confirmed_loaded: true, payload_id: ui.payloadId.value.trim(), count };
         }
       } else if (action === 'start') {
         if (!(await confirmDialog(`Start ${d.label}?`, 'The drone will arm, take off and fly its mission autonomously. Make sure the area is clear.', { ok: 'Start mission', kind: 'go' }))) return;
@@ -134,6 +141,14 @@ export const page = {
         ui.viewer.update(tree, { keepView: false });
         ui.payloadVisible = !!a && /<DropPayload|<ReleasePayload|<DropAtTarget/.test(a.xml);
         ui.payload.style.display = ui.payloadVisible ? '' : 'none';
+        const pay = payloadOf(d);
+        // Every load needs a new package ID (the drone refuses one used in an earlier mission).
+        if (ui.payloadVisible && !ui.payloadId.value.trim()) {
+          const t = new Date(), p2 = n => String(n).padStart(2, '0');
+          ui.payloadId.value = `kit_${d.drone_id}_${t.getFullYear()}${p2(t.getMonth() + 1)}${p2(t.getDate())}_${p2(t.getHours())}${p2(t.getMinutes())}`;
+        }
+        if (ui.payloadVisible && pay?.capacity) ui.payloadCount.value = Math.min(pay.capacity, Math.max(1, +ui.payloadCount.value === 1 ? pay.capacity : +ui.payloadCount.value));
+        ui.payloadCap.textContent = pay ? (pay.capacity ? `Drone set-up: ${pay.capacity} package${pay.capacity === 1 ? '' : 's'} on ${pay.servos.length} servo${pay.servos.length === 1 ? '' : 's'} (${pay.servos.map(s => `set ${s.set} × ${s.drops}`).join(', ')}).` : 'This drone reports no payload servo: set one on its control panel.') : 'Payload set-up not reported by this drone yet.';
         ui.assignedSha = null; if (a) sha256(a.xml).then(v => { ui.assignedSha = v; this.update(store); });
         const cost = h('span', { class: 'mono faint' });
         if (a) radioFrames({ xml: a.xml, route_bundle: a.bundle || null }).then(n => {

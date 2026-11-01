@@ -32,6 +32,7 @@ DEFAULTS = dict(
     sim_persons='20,15;-25,40',
     allow_flight=False, path_clear=False, operator_payload=False, overhead_verified=False,
     drop_min_agl='8', drop_max_agl='20', aux_set='0', aux_value='1.0', separation_m='10',
+    payload_servos='', payload_hold='-1.0',
     emergency_action='RTL', guardian_timeout='3.0')
 
 
@@ -113,12 +114,36 @@ def mesh_key_file(value, drone):
     return path
 
 
+def payload_servos(spec, aux_set=0):
+    """[(actuator set 1..6, drops)] from the panel's "set:drops,set:drops" (several packages,
+    2026-11-01); '' = the single legacy aux_set. Same rules as as2_rescue_runtime.payload_node
+    servo_list (kept here because the panel runs without ROS)."""
+    import re
+    out = []
+    for part in str(spec or '').replace(' ', '').split(','):
+        if not part:
+            continue
+        match = re.fullmatch(r'([1-6])(?::(\d{1,2}))?', part)
+        if not match:
+            raise ValueError('Servo "{}": use set:drops with set 1..6'.format(part))
+        drops = int(match.group(2) or 1)
+        if not 1 <= drops <= 20:
+            raise ValueError('Servo on set {}: 1..20 drops'.format(match.group(1)))
+        if any(s == int(match.group(1)) for s, _ in out):
+            raise ValueError('Actuator set {} is listed twice'.format(match.group(1)))
+        out.append((int(match.group(1)), drops))
+    if not out and 1 <= int(aux_set or 0) <= 6:
+        out = [(int(aux_set), 1)]
+    return out
+
+
 def write_profile(value, drone, mesh_active):
     """Per-aircraft parameter override applied on top of the packaged aircraft.yaml."""
     import yaml
     flight = bool(value('allow_flight'))
     operator = bool(value('operator_payload'))
     aux_set = int(value('aux_set'))
+    servos = payload_servos(value('payload_servos'), aux_set)
     others = [p for p in peers(value) if p != drone] or ['']
     profile = {
         '/**/rescue_runtime': {'ros__parameters': dict(
@@ -135,7 +160,8 @@ def write_profile(value, drone, mesh_active):
             expected_peers=others if mesh_active else [''],
             minimum_separation_m=float(value('separation_m')))},
         '/**/payload_aux_adapter': {'ros__parameters': dict(
-            enabled=1 <= aux_set <= 6, allow_operator_load=operator, actuator_set=aux_set,
+            enabled=bool(servos), allow_operator_load=operator, actuator_set=aux_set,
+            servos=','.join('{}:{}'.format(s, n) for s, n in servos), hold_value=float(value('payload_hold')),
             release_value=float(value('aux_value')), target_system=int(value('system_id')),
             mission_directory=str(MISSION_ROOT / drone))},
     }

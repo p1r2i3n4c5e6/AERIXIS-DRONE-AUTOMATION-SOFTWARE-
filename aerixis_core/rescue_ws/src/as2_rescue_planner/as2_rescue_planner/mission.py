@@ -13,7 +13,7 @@ MODES={'survey':'surveillance','waypoints':'waypoints','search_geotag':'search_g
 DEFAULT_TEMPLATE='human_geotag_resume'
 VISION_OPTIONS=('search_pitch_deg','lost_timeout_s','track_duration_s','orbit_radius_m','orbit_laps',
                 'orbit_speed','approach_speed','rtl_speed','suppress_s','mesh_wait_s','search_time_s','scan_rate_dps',
-                'delivery_wait_s','delivery_speed')
+                'delivery_wait_s','delivery_speed','airborne_wait_s')
 MAX_AREA_VERTICES=40
 
 
@@ -36,7 +36,7 @@ def station_for(region,waypoints):
 def plan_mission(request):
     # Trees are owned by this package (trees.py) so the planner depends on
     # nothing from the runtime, keeping the package graph acyclic.
-    from .trees import mission, vision_mission, delivery_mission, VISION_MODES, END_ACTIONS, xml
+    from .trees import mission, vision_mission, delivery_mission, search_sweep, VISION_DEFAULTS, VISION_MODES, END_ACTIONS, xml
     from .features import custom_mission, feature_spec
     document=request.get('kml')
     if not isinstance(document,str) or len(document.encode())>1_000_000:
@@ -80,6 +80,8 @@ def plan_mission(request):
         if isinstance(entry,dict) and entry.get('role') not in (None,'search','delivery'):
             raise ValueError('%s: role must be search or delivery'%entry.get('drone_id'))
     delivery_ids=[e['drone_id'] for e in fleet if isinstance(e,dict) and e.get('role')=='delivery']
+    fleet_by_id={e['drone_id']:e for e in fleet if isinstance(e,dict) and isinstance(e.get('drone_id'),str)}
+    cameras={}
     searchers=[e for e in fleet if not (isinstance(e,dict) and e.get('role')=='delivery')]
     if delivery_ids:
         if not spec or not spec['geotag'] or spec['type']!='coverage':
@@ -160,6 +162,19 @@ def plan_mission(request):
                     value=float(request[key])
                     if not math.isfinite(value):raise ValueError(key+' must be finite')
                     options[key]=value
+            # Straight-down search (2026-11-01): the gimbal sweep comes from this drone's camera
+            # field of view (fleet entry, else the request, else the A8's 65 x 42 deg), the height
+            # and the lane spacing, so each lane sees exactly its own strip.
+            entry=fleet_by_id.get(item['drone_id'],{})
+            if options.get('search_pitch_deg',VISION_DEFAULTS['search_pitch_deg'])<=-80 and not watching:
+                hfov=float(entry.get('camera_hfov_deg') or request.get('camera_hfov_deg') or 65.0)
+                vfov=float(entry.get('camera_vfov_deg') or request.get('camera_vfov_deg') or 42.0)
+                sweep=search_sweep(altitude,float(request.get('spacing_m',10)),speed,hfov,vfov)
+                options.update(sweep_deg=sweep['sweep_deg'],sweep_period_s=sweep['period_s'])
+                cameras[item['drone_id']]=dict(sweep,hfov_deg=hfov,vfov_deg=vfov)
+                if not sweep['covered']:
+                    reasons.append('%s: lane spacing %.0f m is too wide for its camera at %.0f m (sees %.0f m across even when sweeping); use narrower lanes or fly higher'%(
+                        item['drone_id'],float(request.get('spacing_m',10)),altitude,sweep['swath_m']))
             common=dict(segment_ids=segments,speed=speed,fleet_size=len(fleet),area=search_area(region.shell),
                 stations=watch_lists.get(item['drone_id']),**options)
             if spec:tree=custom_mission(own_specs.get(item['drone_id'],spec),points,request.get('swarm_id') or identity,**common)
@@ -183,7 +198,7 @@ def plan_mission(request):
         altitude=kml.altitude_semantics(areas[0]),origin=origin,region=region_data,
         plan=plan,manifest=built['manifest'],bundles=built['bundles'],xml=xmls,
         complete=not reasons,reason='; '.join(reasons),features=spec,emergency_action=emergency,
-        aircraft_features=own_specs or None,delivery=delivery_ids or None,
+        aircraft_features=own_specs or None,delivery=delivery_ids or None,cameras=cameras or None,
         routes='kml' if use_routes else None,
         stations={b['drone_id']:b['coverage']['waypoints'][0]['pose'] for b in built['bundles']} if watching else None)
     result['manifest']['artifacts']=[dict(drone_id=b['drone_id'],bundle_sha256=b['bundle_sha256'],xml_sha256=b['xml_sha256']) for b in built['bundles']]

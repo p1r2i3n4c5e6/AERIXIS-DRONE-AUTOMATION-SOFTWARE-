@@ -8,7 +8,8 @@ from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
-from .swarm import PeerPeople, keep_out_zones, person_claim, recent_tags, separation_safe, supervisor_allows_renewal
+from .swarm import (PeerPeople, keep_out_zones, person_claim, recent_served, recent_tags, separation_safe,
+                    supervisor_allows_renewal)
 from .node_main import run as run_node
 
 class Agent(Node):
@@ -88,6 +89,7 @@ class Agent(Node):
             safe=separation_safe(self.own,peers,now,self.get_parameter('minimum_separation_m').value,age)
         # Person de-confliction (not the responder lease above): the person this drone responds to.
         person=person_claim(self.supervisor,now);tags=recent_tags(self.supervisor) if self.supervisor else []
+        served=recent_served(self.supervisor) if self.supervisor else []
         if own_fresh:
             # Centimetres / milliseconds are plenty, and every byte counts on a LoRa channel.
             frame=dict(self.own,position=[round(v,2) for v in self.own['position']],stamp=round(self.own['stamp'],3),
@@ -95,6 +97,7 @@ class Agent(Node):
                        velocity=[round(v,2) for v in self.own['velocity']])
             if person:frame['claim']=person
             if tags:frame['tags']=tags
+            if served:frame['served']=served
             self.peer_pub.publish(String(data=json.dumps(frame)))
         authority_fresh=bool(self.assignment and 0<=now-self.assignment['stamp']<=1)
         owned=False
@@ -106,7 +109,8 @@ class Agent(Node):
         value=dict(stamp=now,required=bool(expected),peers_fresh=bool(fresh),separation_safe=bool(safe),owned=owned,
             mission_id=(self.claim or {}).get('mission_id'),target_id=(self.claim or {}).get('target_id'),authority_fresh=authority_fresh,
             peers=[dict(owner=p,age_s=now-self.peers[p]['stamp'] if p in self.peers else None) for p in expected],
-            person_claim=person,peer_claims=self.people.claims(now),peer_tags=self.people.tags(now))
+            person_claim=person,peer_claims=self.people.claims(now),peer_tags=self.people.tags(now),
+            peer_served=self.people.served(now))
         heard=[self.peers[p] for p in expected if p in self.peers]
         value['keep_out']=keep_out_zones(self.own,heard,value['peer_claims'],now,
             self.get_parameter('minimum_separation_m').value,age,self.get_parameter('keep_out_buffer_m').value,

@@ -75,6 +75,11 @@ export const page = {
     this.simLon = h('input', { type: 'number', step: '0.000001', value: saved.lon ?? '', placeholder: 'longitude' });
     this.sim3d = h('input', { type: 'checkbox', checked: saved.show3d ?? true });
     this.simCam = h('input', { type: 'checkbox', checked: saved.cameraOnMission ?? true });
+    // Stop PX4 SITL + Gazebo by itself once every mission ended and every drone is landed (server side).
+    this.simAuto = h('input', { type: 'checkbox', checked: true, onchange: e => api('/api/sim/auto_stop', { enabled: e.target.checked })
+      .then(() => toast('Simulation auto-stop', e.target.checked ? 'On: PX4 SITL and Gazebo stop 60 s after every mission has ended and all drones are landed.' : 'Off: stop the simulation yourself.', 'ok'))
+      .catch(err => { e.target.checked = !e.target.checked; toast('Auto-stop not changed', err.message, 'bad'); }) });
+    this.simAutoBox = h('div');
     const setLoc = (lat, lon, what) => { this.simLat.value = (+lat).toFixed(6); this.simLon.value = (+lon).toFixed(6); toast('Arena location', `${what}: ${(+lat).toFixed(5)}, ${(+lon).toFixed(5)}`); };
     this.simStart = h('button', { class: 'btn primary', onclick: async () => { if (await this.startSim(!sim.status?.components?.px4)) this.overlay.open(true); } }, h('span', { html: icon('play') }), 'Start simulation');
     this.simAddBtn = h('button', { class: 'btn', title: 'One more drone in the same arena (same Gazebo world), up to 4', onclick: () => this.overlay.add() }, h('span', { html: icon('plus') }), 'Add drone');
@@ -94,9 +99,10 @@ export const page = {
         h('button', { class: 'btn sm', onclick: () => { const f = gcsPosition.fix; f ? setLoc(f.lat, f.lon, 'Your location') : toast('Location unknown', 'Allow location in the browser, or use the map centre.', 'warn'); } }, h('span', { html: icon('gps') }), 'My location')),
       h('div', { class: 'row', style: { marginTop: '8px', flexWrap: 'wrap', gap: '14px' } },
         h('label', { class: 'check' }, this.sim3d, h('span', {}, '3D world window (Gazebo)')),
-        h('label', { class: 'check' }, this.simCam, h('span', {}, 'Camera window when a camera mission starts'))),
+        h('label', { class: 'check' }, this.simCam, h('span', {}, 'Camera window when a camera mission starts')),
+        h('label', { class: 'check', title: 'After every mission has ended and all drones are landed and disarmed for 60 s' }, this.simAuto, h('span', {}, 'Stop PX4 SITL + Gazebo when all missions end'))),
       h('div', { class: 'row', style: { marginTop: '10px', flexWrap: 'wrap' } }, this.simStart, this.simAddBtn, this.sim3dBtn, this.simCamBtn, this.simStop),
-      this.simState,
+      this.simState, this.simAutoBox,
       h('details', {}, h('summary', { class: 'kicker', style: { cursor: 'pointer', marginTop: '6px' } }, 'Launcher output'), this.simLog));
     sim.listeners.add(() => this.renderSim());
     // The big start window (setup -> live stages -> ready); the work is done by this page.
@@ -186,6 +192,7 @@ export const page = {
       parts.length ? h('span', { class: 'faint', style: { fontSize: '11.5px' } }, parts.join(' · ')) : null),
       comps.px4 ? hint(h('span', {}, 'Next: Plan → ', h('b', {}, 'Use arena as search area'), ', pick a mission, then Upload & start. The camera window opens with a camera mission.')) : null]);
     this.simLog.textContent = (st?.log || []).join('\n');
+    this.renderAutoStop(st, comps);
     // Ready (or found running after a GCS restart): add the simulated drones to the simulation
     // list and open the UDP link, once, without any typing.
     const ready = state === 'running' && !!comps['sitl-onboard'];
@@ -210,6 +217,22 @@ export const page = {
       }
     }
     this.simWasReady = ready;
+  },
+  /** Auto-stop line: countdown with "Keep running", or what it is still waiting for. */
+  renderAutoStop(st, comps) {
+    const auto = st?.auto_stop;
+    if (!auto) { fill(this.simAutoBox, []); return; }
+    if (document.activeElement !== this.simAuto) this.simAuto.checked = !!auto.enabled;
+    let line = null;
+    if (comps.px4 && auto.enabled && !auto.skip && auto.stops_in_s != null) {
+      line = hint(h('span', {}, h('b', {}, 'All missions ended'), ` and every drone is landed: PX4 SITL and Gazebo stop in ${auto.stops_in_s} s. `,
+        h('button', { class: 'btn sm', onclick: () => api('/api/sim/auto_stop', { keep_running: true }).then(() => toast('Simulation keeps running', 'Auto-stop is off until the next simulation start.', 'ok')).catch(e => toast('Not changed', e.message, 'bad')) }, 'Keep running')), 'warn');
+    } else if (comps.px4 && auto.enabled && auto.skip) {
+      line = h('div', { class: 'faint', style: { fontSize: '11.5px', marginTop: '4px' } }, 'Auto-stop skipped for this simulation (Keep running).');
+    } else if (comps.px4 && auto.enabled && auto.mission_seen && auto.waiting) {
+      line = h('div', { class: 'faint', style: { fontSize: '11.5px', marginTop: '4px' } }, `Auto-stop waits: ${auto.waiting}.`);
+    }
+    fill(this.simAutoBox, line ? [line] : []);
   },
   fillPorts() {
     const keep = this.port.value || prefs.get('port', '');

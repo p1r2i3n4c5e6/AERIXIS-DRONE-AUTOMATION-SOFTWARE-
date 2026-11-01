@@ -43,16 +43,17 @@ class Agent(Node):
     def pose(self,msg):
         p=msg.pose.position;stamp=msg.header.stamp.sec+msg.header.stamp.nanosec/1e9
         if not all(math.isfinite(v) for v in (p.x,p.y,p.z)):return
-        speed=0.0;velocity=[0.0,0.0]
+        speed=0.0;velocity=[0.0,0.0];vz=0.0
         if self.twist is not None:
-            v=self.twist.twist.linear;speed=math.sqrt(v.x**2+v.y**2+v.z**2)
+            v=self.twist.twist.linear;speed=math.sqrt(v.x**2+v.y**2+v.z**2);vz=v.z
             # AS2's twist is in the body frame: turn it into the earth frame with the yaw.
             q=msg.pose.orientation;yaw=math.atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z))
             velocity=[v.x*math.cos(yaw)-v.y*math.sin(yaw),v.x*math.sin(yaw)+v.y*math.cos(yaw)]
         # Without a reported GNSS covariance the configured default is used, deliberately conservative.
         sigma=self.gps_sigma if self.gps_sigma is not None else self.get_parameter('default_sigma_m').value
+        # vz: vertical speed, for the height-layer separation (swarm.vertically_separated).
         self.own=dict(owner=self.identity,position=[p.x,p.y,p.z],frame_id=msg.header.frame_id,stamp=stamp,sigma_m=sigma,speed=speed,
-                      velocity=velocity)
+                      velocity=velocity,vz=vz if math.isfinite(vz) else 0.0)
     def peer(self,msg):
         try:
             value=json.loads(msg.data)
@@ -94,7 +95,7 @@ class Agent(Node):
             # Centimetres / milliseconds are plenty, and every byte counts on a LoRa channel.
             frame=dict(self.own,position=[round(v,2) for v in self.own['position']],stamp=round(self.own['stamp'],3),
                        sigma_m=round(self.own['sigma_m'],2),speed=round(self.own['speed'],2),
-                       velocity=[round(v,2) for v in self.own['velocity']])
+                       velocity=[round(v,2) for v in self.own['velocity']],vz=round(self.own['vz'],2))
             if person:frame['claim']=person
             if tags:frame['tags']=tags
             if served:frame['served']=served

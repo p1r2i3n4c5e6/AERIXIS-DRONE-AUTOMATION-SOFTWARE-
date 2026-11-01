@@ -31,7 +31,8 @@ export const page = {
     this.root = root; this.selected = null; this.cards = new Map();
     this.summary = h('span', { class: 'faint', style: { fontSize: '11.5px' } });
     this.list = h('div', { class: 'ops-list' });
-    const side = h('div', { class: 'ops-side' }, h('div', { class: 'bar' }, h('span', { class: 'kicker' }, 'Fleet'), this.summary), this.list);
+    this.missionBox = h('div', { class: 'mission-time' });
+    const side = h('div', { class: 'ops-side' }, h('div', { class: 'bar' }, h('span', { class: 'kicker' }, 'Fleet'), this.summary), this.missionBox, this.list);
     this.mapBox = h('div', { class: 'map' });
     const overlay = h('div', { class: 'ops-overlay' },
       h('button', { class: 'btn sm', onclick: () => { this.map?.resetView(); this.map?.follow(this.points || []); } }, 'Follow fleet'),
@@ -68,12 +69,34 @@ export const page = {
     try { await api('/api/fleet/command', { drone_id: d.drone_id, action: 'cancel', mission_id: d.data.execution.mission_id, revision: d.data.execution.revision }); toast(`${d.label}: cancel requested`, '', 'warn'); }
     catch (e) { toast('Cancel failed', e.message, 'bad'); }
   },
+  /** Mission time (GCS mission archive): whole mission and each drone, refreshed every 2 s. */
+  missionTime() {
+    const now = Date.now();
+    if (now - (this.archiveAt || 0) > 2000) {
+      this.archiveAt = now;
+      api('/api/archive').then(r => { this.archive = r; this.renderMissionTime(); }).catch(() => {});
+    }
+    this.renderMissionTime();
+  },
+  renderMissionTime() {
+    const cur = this.archive?.current, last = this.archive?.history?.[0];
+    if (cur?.running) {
+      fill(this.missionBox, [h('div', { class: 'mt-head' }, h('b', {}, `Mission ${cur.mission}`), badge(cur.mode === 'Simulation' ? 'SIM' : 'REAL', cur.mode === 'Simulation' ? 'info' : 'warn'),
+        h('span', { class: 'mt-clock' }, cur.elapsed), cur.ending_in_s != null ? h('span', { class: 'faint' }, `all drones done · closing in ${cur.ending_in_s} s`) : null),
+        h('div', { class: 'mt-drones' }, ...cur.drones.map(d => h('span', { class: 'mt-drone', title: d.detail || '' },
+          `${d.label} ${d.duration}`, d.result && d.result !== 'RUNNING' ? badge(d.result, d.result === 'SUCCESS' ? 'ok' : 'bad') : null)))]);
+    } else if (last) {
+      fill(this.missionBox, [h('div', { class: 'mt-head' }, h('span', { class: 'faint' }, `Last: Mission ${last.mission} (${last.mode === 'Simulation' ? 'sim' : 'real'})`),
+        h('span', { class: 'mt-clock small' }, last.mission_time), h('span', { class: 'faint' }, `${last.geotags} geotags · ${last.packages_delivered} packages`))]);
+    } else fill(this.missionBox, []);
+  },
   update(s) {
     const drones = s.fleet;
     if (!drones.length) { fill(this.list, [emptyState('drone', 'No aircraft', 'Add aircraft in step 1.')]); return; }
     if (!this.selected || !drones.some(d => d.drone_id === this.selected)) this.selected = drones[0].drone_id;
     const flying = drones.filter(d => d.data?.active).length, tags = drones.reduce((n, d) => n + (rescueOf(d)?.geotags || []).length, 0);
     this.summary.textContent = `${drones.filter(isFresh).length}/${drones.length} online · ${flying} flying · ${tags} geotags`;
+    this.missionTime();
     // cards
     fill(this.list, drones.map(d => {
       const data = d.data || {}, L = linksOf(d), vis = L.vision || {}, id = d.drone_id;

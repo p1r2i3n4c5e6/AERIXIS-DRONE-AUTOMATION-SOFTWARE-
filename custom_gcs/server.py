@@ -7,6 +7,8 @@ from fleet import Fleet
 import planner_bridge
 import onboard_discovery
 from sim_control import SimControl
+from mission_archive import MissionArchive
+from llm_planner import LocalPlanner
 from mission_store import MissionStore
 from radio_rpc import RadioClient, MESSAGE_TYPE as FLEET_MESSAGE_TYPE
 import glob
@@ -1316,6 +1318,24 @@ def get_ros_nodes_status():
 
 
 sim = SimControl()   # PX4 SITL rescue arena (Simulation mode, this laptop only)
+archive = MissionArchive()   # ~/AERIXIS_Missions/{Simulation,Real_Hardware}/Mission_N (mission time + logs)
+planner_ai = LocalPlanner()  # offline chat mission planner (llama.cpp on this laptop's GPU)
+
+
+def start_sim_auto_stop(fleet, period_s=2.0):
+    """Simulation only: stop PX4 SITL + Gazebo once every mission has ended and every drone is
+    landed and disarmed (SimControl.auto_stop_tick). Runs without any browser open."""
+    def loop():
+        while True:
+            time.sleep(period_s)
+            try:
+                sim_mode = Path(fleet.path).name == 'fleet_sim.json'
+                drones = fleet.snapshot()['drones']
+                archive.tick(drones, sim_mode)
+                sim.auto_stop_tick(drones if sim_mode else [], sim_mode)
+            except Exception as exc:   # never let the watcher die silently
+                print(f'mission archive / sim auto-stop check failed: {exc}', flush=True)
+    threading.Thread(target=loop, name='sim-auto-stop', daemon=True).start()
 FLEET_CONFIG = str(Path(__file__).parent / 'config/fleet.json')
 
 
@@ -1377,6 +1397,13 @@ def make_handler(bridge, fleet=None, missions=None):
                 if self.path == '/api/sim/arena':
                     self._json({'arena': sim.arena()})
                     return
+            if self.path == '/api/llm/status':
+                self._json(planner_ai.status())
+                return
+            if self.path == '/api/archive':
+                # Mission time (running mission) and the saved missions.
+                self._json({'current': archive.status(), 'history': archive.history()})
+                return
             if self.path == '/api/plan/status':
                 # Report planner availability so the UI can disable the KML
                 # workflow honestly instead of failing at upload time.
@@ -1440,6 +1467,13 @@ def make_handler(bridge, fleet=None, missions=None):
                         self._json({'ok': True, 'drones': sim.add()})
                     elif self.path == '/api/sim/gui':
                         sim.gui(); self._json({'ok': True})
+                    elif self.path == '/api/sim/auto_stop':
+                        # Stop PX4 SITL + Gazebo once all missions ended and all drones are down.
+                        if 'enabled' in request:
+                            sim.set_auto_stop(bool(request['enabled']))
+                        if request.get('keep_running'):
+                            sim.keep_running()
+                        self._json({'ok': True, 'auto_stop': sim.auto_status()})
                     elif self.path == '/api/sim/pair':
                         # Add the simulated drones to the SIMULATION aircraft list only (never the field list).
                         if Path(fleet.path).name != 'fleet_sim.json':
@@ -1491,8 +1525,35 @@ def make_handler(bridge, fleet=None, missions=None):
                         raise ValueError('Fleet service is unavailable')
                     if self.path.endswith('/command') and request.get('action') == 'start' and bridge.safety_safe:
                         raise ValueError('Safety switch is SAFE: switch it to READY in the menu before Start')
+                    if self.path.endswith('/command'):
+                        archive.note_stage(request)          # kept for the mission archive
+                        request.pop('gcs_label', None)       # GCS-only: never sent to the drone
                     result = fleet.configure(request) if self.path.endswith('/profile') else fleet.command(request)
                     self._json(result)
+                    return
+                if self.path in ('/api/llm/start', '/api/llm/chat'):
+                    # Offline AI planner: fills the Plan form; it never makes trees or commands drones.
+                    if self.headers.get('X-AS2-GCS') != '1':
+                        raise ValueError('Missing GCS request header')
+                    if self.path.endswith('/start'):
+                        planner_ai.ensure_running()
+                        self._json({'ok': True, **planner_ai.status()})
+                    else:
+                        messages = request.get('messages')
+                        if not isinstance(messages, list) or not messages:
+                            raise ValueError('Nothing to answer')
+                        self._json(planner_ai.chat(messages, request.get('context') or {}))
+                    return
+                if self.path == '/api/archive/open':
+                    # Open a saved mission folder in the file manager (this computer only).
+                    if self.client_address[0] not in ('127.0.0.1', '::1'):
+                        raise ValueError('Opening folders is available on the GCS computer only')
+                    folder = Path(str(request.get('folder') or archive.root)).resolve()
+                    if folder != archive.root.resolve() and archive.root.resolve() not in folder.parents:
+                        raise ValueError('Not a mission archive folder')
+                    folder.mkdir(parents=True, exist_ok=True)
+                    subprocess.Popen(['xdg-open', str(folder)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self._json({'ok': True, 'folder': str(folder)})
                     return
                 if self.path in ('/api/missions/save', '/api/missions/delete', '/api/missions/describe'):
                     if self.headers.get('X-AS2-GCS') != '1':
@@ -1626,11 +1687,13 @@ def main():
     FLEET_CONFIG = args.fleet_config      # field list; the simulation list sits next to it (fleet_sim.json)
     fleet = Fleet(args.fleet_config, bridge.fleet_radio)
     missions = MissionStore(Path(args.fleet_config).parent / 'missions')
+    start_sim_auto_stop(fleet)
     server = ThreadingHTTPServer((args.web_host, args.web_port), make_handler(bridge, fleet, missions))
     print(f'AERIXIS Mission Control · GCS server running at http://{args.web_host}:{args.web_port}')
     try:
         server.serve_forever()
     finally:
+        planner_ai.stop()
         fleet.close()
         bridge.close()
 

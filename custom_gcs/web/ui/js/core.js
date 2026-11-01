@@ -56,6 +56,7 @@ const P = {
   refresh: '<path d="M20 11a8 8 0 0 0-14.9-3M4 13a8 8 0 0 0 14.9 3"/><path d="M4 4v4h4M20 20v-4h-4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   download: '<path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 19h16"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   home: '<path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/>',
   bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
   battery: '<rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2"/><path d="M5 10v4M8 10v4"/>',

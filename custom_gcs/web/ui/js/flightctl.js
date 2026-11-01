@@ -60,9 +60,9 @@ export function update(s) {
   if (modeDialog) modeDialog.refresh();
   const ai = aiState(s);
   aiBtn.classList.toggle('is-on', ai.state === 'on'); aiBtn.classList.toggle('is-mixed', ai.state === 'mixed');
-  aiBtn.title = ai.state === 'on' ? 'AI avoidance ON on every drone: legs bend around other drones. Click to switch off.'
-    : ai.state === 'mixed' ? `AI avoidance on ${ai.on} of ${ai.total} drones. Click to switch it on for all.`
-    : 'AI avoidance off: usual straight legs and stop rules. Click to switch on.';
+  aiBtn.title = ai.state === 'on' ? 'AI avoidance ON on every drone. Click to choose the drones.'
+    : ai.state === 'mixed' ? `AI avoidance on ${ai.on} of ${ai.total} drones. Click to choose the drones.`
+    : 'AI avoidance off: usual straight legs and stop rules. Click to choose the drones (default: payload drones).';
   fill(aiBtn, [h('span', { class: 'fc-ic', html: icon('ai') }),
     h('span', { class: 'fc-text' }, ai.state === 'on' ? 'AI: ON' : ai.state === 'mixed' ? `AI: ${ai.on}/${ai.total}` : 'AI: off')]);
   const safe = s.state?.safety_safe !== false;
@@ -81,20 +81,55 @@ async function toggleSafety() {
   catch (e) { toast('Safety switch not changed', e.message, 'bad'); }
 }
 
+/** Drones whose assigned tree drops packages (the delivery drones of the current mission). */
+export function payloadDrones() {
+  return store.fleet.filter(d => /<DropAtTarget|<DropPayload|<ReleasePayload/.test(store.assigned.get(d.drone_id)?.xml || '')).map(d => d.drone_id);
+}
+const aiOn = d => d.data?.ros?.rescue?.data?.avoidance?.enabled === true;
+
+/** AI avoidance ON for exactly these drones, OFF for every other radio drone (2026-11-01: the
+ *  operator chooses; by default only the payload-dropping drones). Returns {drone_id: 'ok'|error}. */
+export async function setAiDrones(ids) {
+  const radio = store.fleet.filter(d => String(d.endpoint || '').startsWith('mavlink://')).map(d => d.drone_id);
+  const on = radio.filter(id => ids.includes(id)), off = radio.filter(id => !ids.includes(id));
+  const results = {};
+  if (on.length) Object.assign(results, (await api('/api/avoidance', { enabled: true, drone_ids: on })).results || {});
+  if (off.length) Object.assign(results, (await api('/api/avoidance', { enabled: false, drone_ids: off })).results || {});
+  return results;
+}
+
 async function toggleAi() {
-  const ai = aiState(store);
-  const enable = ai.state !== 'on';
-  if (!ai.total) return toast('No aircraft', 'Add aircraft on the Connect page first.', 'warn');
-  if (enable && !(await pick('Switch AI avoidance on?',
-    'Every drone flies its legs with the learned avoidance brain and the ORCA shield: near another drone it bends its path, passes on the right and rejoins its line. Takes effect from each drone\'s next leg. The 10 m separation stop, holds and return heights stay active. Tested in simulation only.',
-    null, 'Switch AI on', 'primary'))) return;
-  try {
-    const r = await api('/api/avoidance', { enabled: enable });
-    const failed = Object.entries(r.results || {}).filter(([, v]) => v !== 'ok');
-    toast(enable ? 'AI avoidance ON sent' : 'AI avoidance off sent',
-      failed.length ? 'Not reached: ' + failed.map(([k, v]) => `${k} (${v})`).join(', ') : 'Each drone confirms in its status within a few seconds.',
-      failed.length ? 'bad' : enable ? 'warn' : 'ok', 9000);
-  } catch (e) { toast('AI avoidance not changed', e.message, 'bad'); }
+  const drones = store.fleet.filter(d => String(d.endpoint || '').startsWith('mavlink://'));
+  if (!drones.length) return toast('No aircraft', 'Add aircraft on the Connect page first.', 'warn');
+  const payload = payloadDrones();
+  const anyOn = drones.some(aiOn);
+  const boxes = drones.map(d => h('input', { type: 'checkbox', value: d.drone_id, checked: anyOn ? aiOn(d) : payload.includes(d.drone_id) }));
+  const setAll = test => boxes.forEach(b => { b.checked = test(b.value); });
+  const role = d => payload.includes(d.drone_id) ? 'payload drop' : store.assigned.get(d.drone_id) ? 'search / other' : 'no tree';
+  const dialog = h('dialog', { class: 'glass-dialog ai-pick' },
+    h('div', { class: 'card-head' }, h('div', { class: 'card-icon', html: icon('ai') }), h('h3', {}, 'AI avoidance — choose the drones')),
+    h('p', { class: 'muted' }, 'A ticked drone flies its legs with the learned avoidance brain and the ORCA shield: near another drone it bends its path and rejoins its line. Default: only the payload-dropping drones of this mission. The separation stop, holds and return heights stay active. Takes effect from each drone\'s next leg.'),
+    h('div', { class: 'row', style: { gap: '6px', flexWrap: 'wrap', margin: '6px 0' } },
+      h('button', { class: 'btn sm primary', onclick: () => setAll(id => payload.includes(id)) }, 'Payload drones only'),
+      h('button', { class: 'btn sm', onclick: () => setAll(() => true) }, 'All'),
+      h('button', { class: 'btn sm', onclick: () => setAll(() => false) }, 'None')),
+    h('div', { class: 'fc-pick' }, ...drones.map((d, i) => h('label', { class: 'check' }, boxes[i],
+      h('span', {}, h('b', {}, d.label || d.drone_id), h('small', { class: 'faint' }, ` ${role(d)} · now ${aiOn(d) ? 'AI on' : 'off'}`))))),
+    h('div', { class: 'row end', style: { marginTop: '16px' } },
+      h('button', { class: 'btn', onclick: () => close() }, 'Cancel'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        const ids = boxes.filter(b => b.checked).map(b => b.value); close();
+        try {
+          const r = await setAiDrones(ids);
+          const failed = Object.entries(r).filter(([, v]) => v !== 'ok');
+          toast(ids.length ? `AI avoidance ON: ${ids.map(id => store.drone(id)?.label || id).join(', ')}` : 'AI avoidance off on every drone',
+            failed.length ? 'Not reached: ' + failed.map(([k, v]) => `${k} (${v})`).join(', ') : 'Each drone confirms in its status within a few seconds.',
+            failed.length ? 'bad' : ids.length ? 'warn' : 'ok', 9000);
+        } catch (e) { toast('AI avoidance not changed', e.message, 'bad'); }
+      } }, 'Apply')));
+  const close = () => { dialog.close(); dialog.remove(); };
+  dialog.addEventListener('cancel', close);
+  document.body.append(dialog); dialog.showModal();
 }
 
 async function send(action) {

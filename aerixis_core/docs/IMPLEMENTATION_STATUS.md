@@ -3,6 +3,187 @@
 What is built, what is verified, and what is still open. This file is written to be
 accurate rather than optimistic: SITL success is not flight qualification.
 
+## 2026-11-01 (arena run): full 300 x 300 m mission planned on the GCS — take-off failures found
+
+User request: plan on the GCS (not a built-in mission 6/7) a mission over the whole arena, 2
+search/geotag drones + 2 delivery drones with 10 packages each (5 servos x 2 drops), 2 m/s, done
+within 50 min, all 4 cameras and Gazebo visible.
+- GCS: the mission builder got a "Delivery drones" option (custom missions with coverage + geotag
+  may name delivery drones; custom_gcs/web/ui/js/builder.js, page-plan.js, mission_store.py).
+  Saved as "Arena search, geotag & deliver": KML = full arena, 15 m, 17 m lanes, survey 2 m/s,
+  approach 1 m/s (2 m/s made an approaching drone exceed the 100 deg/s rate limit and abort
+  AIRCRAFT_UNSTABLE), return/delivery 2 m/s. Plan: drone0 16 wp ~21 min, drone1 18 wp ~24 min.
+- SITL payload profile: `SIM_PAYLOAD_SERVOS` default 1:2,2:2,3:2,4:2,5:2 (10 packages).
+- Lane gate hole: right after take-off (home set, no leg yet) a person seen on the way made drone1
+  fly a 41 m diagonal. vision_ops.lane_gate now defers there too ("on the way to the first lane").
+- Take-off failures, causes measured (all fixed; the first and third also apply to real drones):
+  1. "No climb 20 s" while PX4 was spooling up: Gazebo ran at 0.5-0.77x real time under the
+     4-drone load, so 20 s on the companion clock was ~7 s for PX4 (ulog: thrust 0.25 -> 0.75 over
+     6 s, lift-off at 7 s, then stopped). The take-off waits (arm 8 s, climb 20 s) now run on the
+     FC's own clock (failsafe_flags.timestamp, sent at least every 0.5 s: sim time in SITL, boot
+     time on a real FC), capped at 3x on the wall clock (engine.takeoff_waited, FC_CLOCK_LIMIT).
+  2. A 1 s data gap (simulation stall) while TAKING_OFF on the ground cancelled the take-off. The
+     3 s ground grace (DISARMED/LANDED) now also covers TAKING_OFF while speed < 0.3 m/s
+     (safety.GROUND_SPEED_MPS); once it climbs the 1 s limit applies.
+  3. AS2 `SynchronousServiceClient` waited forever for a service response. Under load the
+     controller's set_control_mode response was lost ("failed to send response ... (timeout)"):
+     the take-off behaviour froze in "Setting control mode", never sent a reference, ignored its
+     cancel, and the drone stayed ARMED on the ground in TAKING_OFF (LAND refused from there).
+     The client now takes an optional response timeout (default unchanged: wait forever) and
+     `BasicMotionReferenceHandler::setMode` asks up to 3 times, 3 s each (as2_core,
+     as2_motion_reference_handlers; rebuild the behaviours and controller, both link it).
+  Gimbal model mass set to the real A8 mini (4 x 0.024 kg, was 4 x 0.1 kg; inertias scaled):
+  custom_gcs/simulation/aerixis_sim/models/gimbal_a8/model.sdf. Not the take-off cause.
+- GCS Upload kept the last package ID after a start; a re-run reused it and the drone (rightly)
+  refused the load. A started mission now clears the ID so the next load gets a new one
+  (page-upload.js packageSpent; IDs carry seconds).
+- Recovery after a data gap: a 1 s gap cancelled a take-off at 7 m; ReturnToLaunch then failed on
+  its first tick ("Fresh valid aircraft position required", data back 0.3 s later), the tree's
+  RequestRecovery held and the drone hovered armed with the mission FAILED (operator landed it).
+  ReturnToLaunch/ManagedLand now wait up to 5 s for fresh FC data before failing
+  (engine.RECOVERY_DATA_WAIT_S, DATA_GAP_REASONS).
+- In-flight data gaps (AS2 pose/platform topics paused >1 s in bursts while IMU kept arriving; the
+  onboard stacks run at nice 10 next to Gazebo) also failed survey legs. New runtime parameter
+  `vehicle_max_age_s` (default 1.0 s = aircraft unchanged); the SITL profile sets 2.0 s
+  (`SIM_VEHICLE_MAX_AGE_S`, sitl_onboard.sh). Readiness-lost messages now print each input's age.
+  This is a laptop-load accommodation, not a flight fix.
+- After a geotag the camera goes straight back to searching (user request, onboard only, no GCS
+  tree change): ReleaseTargetLock points the gimbal back to the search attitude and pauses new
+  selections for at most 1.5 s (POST_TAG_SUPPRESS_S; the tree's suppress_s 8 s is now an upper
+  limit). A re-lock on a person already geotagged / served / claimed by a peer is dropped on its
+  first locked frame (any image position, not only once centred) with a 1 s pause
+  (REJECT_SUPPRESS_S). Before: the tracker re-selected the person just geotagged and the camera
+  slewed after them for seconds during ResumeCoverage. Planned sweep for this mission is 0: at
+  15 m the 65 deg camera sees 19.1 m across, more than the 17 m lane spacing.
+- Delivery drone aborted AIRCRAFT_UNSTABLE (roll/pitch rate 63 deg/s, tilt 0.3 deg) with 2
+  packages left: FlyToTarget stepped the velocity reference from hover to ~2.8 m/s. RosDriver now
+  limits the horizontal velocity reference to 1.5 m/s^2 (VELOCITY_ACCEL_MPS2), starting from the
+  measured velocity; stop/hover stay immediate. Applies to every velocity motion (aircraft too).
+- Run 3 result (16:29 start, all fixes above except the last three, which were installed after):
+  search drones flew their lanes (east-west, 17 m apart, no diagonal detours). Geotags: drone0 20,
+  drone1 9 (29 of 50 people). Deliveries: drone3 10/10 (SUCCESS, ~21 min), drone2 8/10 then the
+  abort above. drone1 covered only 2 of its 9 lanes: at 23 min its SafetyGate(PeersFresh) failed
+  (mesh said peers stale, ~1-3 min after both delivery drones' missions had ended) and it
+  returned. Cause NOT found yet — open. drone0 was still on its last lane at 44 min.
+  Timing: Gazebo ran at 0.5-0.77x real time, so 2 m/s is ~1.2 m/s on the wall clock, and each
+  geotag (pause, approach at 1 m/s, geotag, resume) costs 15-35 s. The 50-min target is not met
+  on this laptop; the planner's flight estimate (21-24 min) ignores geotag detours.
+- Not yet flown in SITL: recovery data wait, vehicle_max_age_s 2 s, post-geotag release, velocity
+  acceleration limit (all unit-tested, installed; need an onboard restart and a new run).
+- GCS simulation auto-stop (user request): Connect -> Simulation panel checkbox "Stop PX4 SITL +
+  Gazebo when all missions end" (on by default, saved in config/simulation.json). The GCS server
+  checks every 2 s (thread sim-auto-stop, custom_gcs/server.py; logic SimControl.auto_stop_tick and
+  fleet_finished in sim_control.py): only in Simulation mode, only after a mission ran since the
+  simulation started, and only when no drone runs a mission and every drone reports fresh status,
+  disarmed and DISARMED/LANDED. After 60 s in that state it runs `launch/sim.sh stop` (PX4, Gazebo,
+  camera window, onboard stacks; the GCS keeps running). A new mission resets the countdown; a
+  drone with stale/unknown state blocks it. The panel shows the countdown with "Keep running"
+  (skips auto-stop until the next simulation start). POST /api/sim/auto_stop {enabled|keep_running}.
+  Tests: custom_gcs/tests/test_sim_auto_stop.py (6).
+- GCS mission archive + mission time (user request): custom_gcs/mission_archive.py, driven by the
+  same 2 s server thread. Folders ~/AERIXIS_Missions/Simulation/Mission_N and
+  ~/AERIXIS_Missions/Real_Hardware/Mission_N (AERIXIS_MISSIONS_DIR to move), one sub-folder per
+  drone: status.json, track.csv (1 Hz: lat/lon/alt, x/y/z, speed, battery, operation, armed,
+  packages left), events.jsonl (operation/execution changes), geotags.json/.csv, tree.xml,
+  route_bundle.json, payload_load.json; summary.txt/.json with mission time (first start -> last
+  end), per-drone time/result/geotags/packages/distance flown. Simulation also copies onboard/
+  (BT event journal gzip, onboard logs sliced to the mission window, rescue + payload journals,
+  PX4 .ulg). Real hardware: only what crosses the link; full onboard logs stay on the Pi. A mission
+  opens at the first drone start and closes 30 s after the last drone ended. GCS: Operations shows
+  the live mission clock + each drone's time; Logs & data -> "Mission archive" lists saved
+  missions (time, results) with "Open folder". APIs GET /api/archive, POST /api/archive/open.
+  Uploads carry gcs_label (mission name) which the server strips before forwarding. Tests:
+  custom_gcs/tests/test_mission_archive.py (4). Not yet seen with a live mission.
+- Offline AI mission planner (user request): Plan page card "AI mission planner". The operator
+  types the mission in their own language (Hinglish/Hindi/English); a local model fills the Plan
+  form: mission (built-in or custom features), parameters, each drone's role, orbit drones,
+  emergency. "Apply to plan" puts it in the normal form; the operator still accepts the conditions
+  and the existing planner makes the BT trees (the model never writes trees or commands drones).
+  Runtime: llama.cpp b12024 Vulkan build (~/aerixis_llm/runtime/vulkan; the published CUDA build
+  needs glibc 2.38, Ubuntu 22.04 has 2.35) + Qwen3-4B-Instruct-2507 Q4_K_M (2.5 GB,
+  ~/aerixis_llm/models), on the RTX 4050 (--device Vulkan1; the Intel iGPU is Vulkan0). Both
+  downloads SHA-256 verified. llama-bench: prompt ~3000 tok/s, generation ~60 tok/s. Measured in
+  the GCS: 4-6 s per answer (~50 words/s), model load + warm-up 14 s once (kept loaded; first use
+  without warm-up took 17 s because Vulkan compiles its shaders). Output forced to a JSON schema;
+  the server (custom_gcs/llm_planner.py) clamps parameters to their limits, refuses delivery roles
+  for drones without packages, switches search_deliver without a delivery drone to geotag,
+  checks lane spacing against the camera footprint (exact formula), forces "needs info" when no
+  area is loaded, and appends the current area/drone state to the operator's message. APIs GET
+  /api/llm/status, POST /api/llm/start, /api/llm/chat. Tests: tests/test_llm_planner.py (8).
+  Known: Hindi typed in Devanagari is answered in Hinglish (Latin letters); a GCS restart reuses
+  the running model (it then keeps running after the GCS stops; ~2.7 GB GPU memory).
+- Run 4 (20:40, end-to-end test of the new GCS features): 4-drone arena started from the GCS;
+  planned only through the AI chat ("mere 4 drone hai. 2 drone sirf search aur geotag karein,
+  baaki 2 ... packet drop karein ... 2 m/s") -> search_deliver, drone0/1 search, drone2/3
+  delivery, 15 m, 17 m lanes, 2 m/s, approach 1, RTL (7.8 s); Apply + accept -> trees (16 wp
+  each, ~20 min). Operator set endurance 60 and airborne wait 600 by hand. Results: mission time
+  32:16 (GCS clock + archive Mission_1), 10 geotags, 10 packages delivered (drone2 7, drone3 3;
+  the archive summary said 0 - fixed after, see below), delivery drones SUCCESS. drone1 FAILED at
+  8 min: "Peer freshness/separation unavailable" (1 s mesh gap). drone0 FAILED at 22 min:
+  AIRCRAFT_UNSTABLE when it braked from 2 m/s to hover on detecting a person (PauseCoverage;
+  roll/pitch rate ~42-49 deg/s, limit 45 deg/s for 0.5 s) - OPEN. Auto-stop worked: 60 s after
+  the last landing PX4 + Gazebo + onboard stopped, message "stopped automatically".
+- Peer-data gaps (fix for drone1, unit-tested, not flown yet): swarm_agent marks peers stale after
+  max_peer_age_s 1.0 and the runtime read the swarm status with a 0.5 s age, and survey legs
+  failed at once. Now (engine.peer_state, PEER_GAP_HOLD_S 5, SWARM_STATUS_AGE_S 1.5): after a
+  fresh and separation-safe state, missing/stale peer data holds position (PeerGapHold; the leg
+  is cancelled and sent again when data is back; vision responses hover too) and the flags stay
+  true for the tree's SafetyGates; longer than 5 s, or fresh data saying "too close", fails as
+  before. Reset per mission. Tests: test_peer_gap.py (4); runtime 237 pass.
+- GPU memory: the Gazebo 3D window crashed (OGRE buffer upload segfault) next to the planner model
+  at 8k context (3.6 GB). Model now 4k context, q8_0 KV cache, -ub 256: 2.7 GB; Gazebo window ok.
+- Auto-stop no longer depends on the Connect page polling the simulation state (checks PX4 itself
+  before stopping). Archive: package counts keep the highest value seen during the mission (drones
+  reset after it), logs without time stamps are copied (last 5 MB), PX4 .ulg are gzip-compressed
+  (were 270 MB each, 1.1 GB per mission). Track rows every 2 s.
+- Braking abort fix (as2_motion_controller, aircraft too): a hover requested while moving froze the
+  reference at the current position, the PID asked for an instant 2 m/s change and the roll/pitch
+  rate passed 45 deg/s (AIRCRAFT_UNSTABLE at PauseCoverage). The hover point is now ahead along
+  the horizontal velocity by hover_stop_ahead_s (1 s = 1/kp, max hover_stop_max_m 5 m): the first
+  command equals the current velocity, an exponential stop (<= ~2 m/s^2 from 2 m/s).
+  controller_handler hoverStopOffset + tests/hover_stop_gtest.cpp (3). Run 5 (Mission 2, 30:09):
+  no instability abort at any detection stop; 12 geotags, 12 packages.
+- Height layers: run 5's two search failures were delivery drones at the search height inside
+  the separation margin (SeparationSafe gate). Delivery drones now fly at
+  delivery_altitude_m (GCS parameter, 0 = search + 5 m = 20 m at 15 m; planner DELIVERY_LAYER_M);
+  swarm.separation_safe also accepts a vertical gap >= 4 m + (|vz own| + |vz peer|) x (age + 0.5 s)
+  (VERTICAL_SEPARATION_M; frames carry vz; a peer without vz is not vertically separated).
+  Tests: test_height_layers.py (4), planner test_delivery_drones_fly_above_the_search_drones.
+  Run 6 (Mission 3, 25:10): no separation failure; delivery 9/9 geotags served.
+- Run 6's search drones stopped 2 m short of a lane end on the area edge for ~10 min: AI avoidance
+  had been switched ON fleet-wide through /api/avoidance ~2 min into the mission (the GCS AI
+  button, confirm dialog) and its ORCA shield keeps 1.5 m inside the area edge while "reached"
+  needed < 1.5 m. avoidance.leg_command: within STALL_REACH_M 4 m and held < 0.3 m/s for 3 s ->
+  reached. Unit-tested, not flown.
+- Run 7 (Missions 4+5): start-up failures, OPEN. Sim1: PX4 armed but the arm service response was
+  lost ("failed to send response"), the tree retried, PX4 kept leaving and re-entering OFFBOARD
+  every ~1.7 s while armed on the ground, the model tipped to 36 deg (AIRCRAFT_UNSTABLE) and RTL
+  was refused (not flying); left armed on the ground until disarmed by hand. Sim2: armed then PX4
+  disarmed within 3 s ("FC did not arm within 8 s"). Its ulog shows the uXRCE-DDS time sync
+  resetting every ~12.5 s ("time jump detected") - the simulation runs slower than real time.
+  Likely cause of the OFFBOARD flapping; not investigated further.
+- AI avoidance per drone (user request): the sidebar AI button opens a chooser (each drone's role,
+  current state; "Payload drones only" default, All, None); Apply switches it ON for the ticked
+  drones and OFF for the others (/api/avoidance with drone_ids). flightctl.setAiDrones /
+  payloadDrones (drones whose assigned tree drops packages). The planner's plan carries ai_drones
+  (default: delivery drones) and Apply sets them.
+- AERIXIS Copilot (user request): the AI planner is now a floating robot-drone button in the
+  bottom-right corner of every page (hide/show, greeting bubble "Hey! Use me to plan the
+  mission" on GCS start). Chat answers in the operator's language and only about AERIXIS drones,
+  missions, the GCS and its software (scope rule in llm_planner.RULES; not a fine-tuned model).
+  Every proposed plan is an editable card: mission, the mission's parameters (limits enforced),
+  per drone role / AI avoidance / endurance; "Apply to plan" fills the Plan form and sets the AI
+  drones. "Instant plan" plans at once without the model from the KML and each drone's own
+  set-up (camera drones search, payload drones deliver, lane spacing from the camera footprint,
+  2 m/s, AI on the delivery drones). web/ui/js/aiplanner.js (mounted in main.js). Per-drone height
+  and speed are not planner inputs yet (one height/speed for all search drones; delivery height
+  separate).
+- Run 8 (Mission 6, started by the operator from the GCS, ~24 min when last checked): AI on the
+  delivery drones only; search drones 11 + 13 geotags still flying at 23-24 min with no failure;
+  delivery 9 + 9 packages.
+- Known, not changed: AS2 go_to passes max_speed as a per-axis limit, so a diagonal leg flies up
+  to 2.8 m/s at "2 m/s" (lanes along an axis fly 2.0). Transit and delivery legs are diagonal.
+
 ## 2026-11-01 (round 4): several packages per drone, set on the drone's control panel
 
 User request: delivery drones carry several packages; set on the onboard computer's panel which

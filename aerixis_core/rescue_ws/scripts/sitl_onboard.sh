@@ -67,9 +67,9 @@ for ((i=0; i<DRONES; i++)); do
   DRONE=drone$i; SYSID=$((i+1)); MANAGER_PORT=$((8790+i))
   mkdir -p "$STATE/missions/$DRONE" "$STATE/rescue/$DRONE" "$STATE/payload/$DRONE"; chmod 700 "$STATE/missions/$DRONE"
   cat > "$STATE/${DRONE}_sitl.yaml" <<YAML
-/**/rescue_runtime: {ros__parameters: {minimum_separation_m: $SEPARATION, enable_motion: true, allow_operator_load: true, overhead_envelope_verified: true, min_overhead_agl_m: 5.0, max_overhead_agl_m: 20.0, state_dir: $STATE/rescue/$DRONE}}
+/**/rescue_runtime: {ros__parameters: {minimum_separation_m: $SEPARATION, vehicle_max_age_s: ${SIM_VEHICLE_MAX_AGE_S:-2.0}, enable_motion: true, allow_operator_load: true, overhead_envelope_verified: true, min_overhead_agl_m: 5.0, max_overhead_agl_m: 20.0, state_dir: $STATE/rescue/$DRONE}}
 /**/rescue_route_publisher: {ros__parameters: {origin_source: estimator, altitude_frame_verified: true, path_clear_verified: true, bundle_directory: $STATE/missions/$DRONE}}
-/**/payload_aux_adapter: {ros__parameters: {enabled: true, allow_operator_load: true, actuator_set: 1, servos: "${SIM_PAYLOAD_SERVOS:-1:1,2:2}", release_value: 1.0, target_system: $SYSID, mission_directory: $STATE/missions/$DRONE, state_dir: $STATE/payload/$DRONE}}
+/**/payload_aux_adapter: {ros__parameters: {enabled: true, allow_operator_load: true, actuator_set: 1, servos: "${SIM_PAYLOAD_SERVOS:-1:2,2:2,3:2,4:2,5:2}", release_value: 1.0, target_system: $SYSID, mission_directory: $STATE/missions/$DRONE, state_dir: $STATE/payload/$DRONE}}
 /**/swarm_agent: {ros__parameters: {minimum_separation_m: $SEPARATION, expected_peers: $([ "$DRONES" -gt 1 ] && echo "$PEERS_YAML" || echo "['']")}}
 YAML
   TOKEN="$STATE/missions/$DRONE/pairing.token"

@@ -61,6 +61,15 @@ class Tests(unittest.TestCase):
         self.clock.value+=.01;self.healthy()                       # airborne (platform_state 3)
         self.clock.value+=1.5;flags=self.engine.flags()
         self.assertFalse(flags['VehicleHealthy']);self.assertIn('older than 1.0 s',flags['health'])
+    def test_data_gap_while_take_off_spools_up_on_the_ground(self):
+        # SITL 2026-11-01: a 1 s simulation stall cancelled a take-off still standing on the ground.
+        self.healthy();base=dict(self.e.get('vehicle'),platform_state=2)
+        self.clock.value+=.01;self.e.put('vehicle',dict(base,speed=0.05))
+        self.clock.value+=1.5;flags=self.engine.flags()
+        self.assertTrue(flags['VehicleHealthy'],flags['health'])
+        self.clock.value+=.01;self.e.put('vehicle',dict(base,speed=0.5))   # climbing
+        self.clock.value+=1.5;flags=self.engine.flags()
+        self.assertFalse(flags['VehicleHealthy']);self.assertIn('older than 1.0 s',flags['health'])
     def test_health_reason_names_the_instability(self):
         self.healthy();self.clock.value+=.01;v=dict(self.e.get('vehicle'),tilt_deg=40);self.e.put('vehicle',v)
         self.engine.flags();self.clock.value+=.6;self.e.put('vehicle',dict(v));flags=self.engine.flags()

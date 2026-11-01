@@ -42,6 +42,11 @@ VIBRATION_SAMPLES=25
 # unknown" then withdrew readiness and the mission tree's safety gate aborted all 4 drones at
 # take-off. Tilt and body rates are still checked on every sample; a longer gap is unknown again.
 VIBRATION_HOLD_S=2.0
+# Horizontal acceleration limit of streamed velocity references (FlyToTarget, approach, orbit,
+# avoidance). SITL 2026-11-01: FlyToTarget stepped from hover to 2.8 m/s (and reversed between
+# targets); PX4 follows an offboard velocity step at once, the roll/pitch rate passed 45 deg/s
+# for 0.5 s and the delivery drone aborted AIRCRAFT_UNSTABLE with 2 packages left.
+VELOCITY_ACCEL_MPS2=1.5
 
 
 def vibration_estimate(samples, now, held=None):
@@ -76,6 +81,7 @@ def battery_fraction(msg, scale=100.0):
 class RosDriver:
     # Velocity-control state; class defaults keep partially constructed test doubles valid.
     velocity_active=False;controller_mode=None;speed_future=None;velocity_error='';path_facing=True;speed_acked=False
+    ramp=None   # (last horizontal velocity sent, time) of the acceleration limit; None = start over
     def __init__(self,node,enabled):
         self.node=node;self.enabled=enabled;self.goal=None;self.sending=None;self.result=None
         self.cancel_future=None;self.stopping=False;self.outcome=None;self.hover_future=None;self.hover_ok=False
@@ -91,7 +97,7 @@ class RosDriver:
         self.twist_pub=node.create_publisher(TwistStamped,'motion_reference/twist',qos_profile_sensor_data)
         self.pose_pub=node.create_publisher(PoseStamped,'motion_reference/pose',qos_profile_sensor_data)
         node.create_subscription(ControllerInfo,'controller/info',self.on_controller,qos_profile_system_default)
-        self.controller_mode=None;self.speed_future=None;self.velocity_active=False;self.velocity_error=''
+        self.controller_mode=None;self.speed_future=None;self.velocity_active=False;self.ramp=None;self.velocity_error=''
     def on_controller(self,msg):self.controller_mode=msg.input_control_mode
     def position(self,frame):
         """The aircraft's latest measured position in `frame` (x, y, z), or None."""
@@ -121,6 +127,7 @@ class RosDriver:
                 request.control_mode.yaw_mode=ControlMode.YAW_ANGLE;self.speed_future=self.hover.call_async(request)
             return False
         stamp=self.node.get_clock().now().to_msg()
+        linear=self.ramped(linear)
         twist=TwistStamped();twist.header.stamp=stamp;twist.header.frame_id=frame
         twist.twist.linear.x,twist.twist.linear.y,twist.twist.linear.z=map(float,linear)
         pose=PoseStamped();pose.header.stamp=stamp;pose.header.frame_id=frame
@@ -132,6 +139,23 @@ class RosDriver:
         pose.pose.position.x,pose.pose.position.y,pose.pose.position.z=here
         pose.pose.orientation.z=math.sin(yaw/2);pose.pose.orientation.w=math.cos(yaw/2)
         self.pose_pub.publish(pose);self.twist_pub.publish(twist);return True
+    def ramped(self,linear):
+        """Limit the change of the horizontal velocity reference to VELOCITY_ACCEL_MPS2. A new
+        velocity motion starts from the measured earth-frame velocity (0 when unknown)."""
+        now=self.node.get_clock().now().nanoseconds/1e9
+        if self.ramp is None:
+            evidence=getattr(self.node,'evidence',None)
+            v=((evidence.get('vehicle',1.0) if evidence is not None else None) or {}).get('velocity')
+            start=[float(v[0]),float(v[1])] if isinstance(v,(list,tuple)) and len(v)>=2 and all(
+                isinstance(x,(int,float)) and math.isfinite(x) for x in v[:2]) else [0.0,0.0]
+            self.ramp=(start,now)
+        (px,py),then=self.ramp
+        step=VELOCITY_ACCEL_MPS2*min(max(now-then,0.0),0.25)
+        dx,dy=float(linear[0])-px,float(linear[1])-py;d=math.hypot(dx,dy)
+        if d>step:px,py=px+dx*step/d,py+dy*step/d
+        else:px,py=float(linear[0]),float(linear[1])
+        self.ramp=([px,py],now)
+        return [px,py,float(linear[2])]
     def vision_command(self,value):self.emit(self.vision_pub,value)
     def emit(self,publisher,value):
         value['stamp']=self.node.get_clock().now().nanoseconds/1e9
@@ -180,14 +204,14 @@ class RosDriver:
         """Forget a motion that never handed back after its cancel was sent (ManagedLand takes
         over). The action server still finishes the old goal; its late result is ignored."""
         self.sending=None;self.goal=None;self.result=None;self.cancel_future=None
-        self.velocity_active=False;self.hover_future=None;self.stopping=False;self.outcome=None
+        self.velocity_active=False;self.ramp=None;self.hover_future=None;self.stopping=False;self.outcome=None
     def stop(self):
         if not self.stopping:self.hover_ok=False
         if self.velocity_active:self.speed_acked=False   # the next velocity motion switches again
         if self.velocity_active and self.controller_mode is not None and self.controller_mode.control_mode==ControlMode.SPEED:
             stop=TwistStamped();stop.header.stamp=self.node.get_clock().now().to_msg();stop.header.frame_id='earth'
             self.twist_pub.publish(stop)  # zero velocity until HOVER is accepted
-        self.velocity_active=False
+        self.velocity_active=False;self.ramp=None
         self.stopping=True
     def reanchor(self):
         """Ask for HOVER again: AERIXIS core's controller freezes the hover reference at the measured
@@ -227,6 +251,11 @@ class RescueRuntime(Node):
         self.declare_parameter('overhead_envelope_verified',False)
         self.declare_parameter('allow_operator_load',False)
         self.declare_parameter('min_overhead_agl_m',8.0);self.declare_parameter('max_overhead_agl_m',20.0)
+        # Flight-controller data older than this withdraws readiness in flight. 1 s on aircraft;
+        # the SITL profile sets 2 s (2026-11-01: on a laptop running 4 stacks + Gazebo, AS2's
+        # pose/platform topics paused >1 s in bursts and cancelled take-offs and survey legs).
+        self.declare_parameter('vehicle_max_age_s',1.0)
+        self.data_age=min(3.0,max(0.5,float(self.get_parameter('vehicle_max_age_s').value)))
         self.declare_parameter('geotag_exclusion_radius_m',6.0);self.declare_parameter('claim_exclusion_radius_m',8.0)
         self.declare_parameter('path_facing_legs',True)
         # Nadir search (2026-10-31): gimbal straight down, swinging this far to each side of the
@@ -266,7 +295,8 @@ class RescueRuntime(Node):
         self.engine.safety.limits=Limits(overhead_envelope_verified=self.get_parameter('overhead_envelope_verified').value,
             allow_operator_load=self.get_parameter('allow_operator_load').value,
             min_overhead_agl_m=self.get_parameter('min_overhead_agl_m').value,
-            max_overhead_agl_m=self.get_parameter('max_overhead_agl_m').value)
+            max_overhead_agl_m=self.get_parameter('max_overhead_agl_m').value,
+            vehicle_max_age_s=self.data_age)
         self.boot=uuid.uuid4().hex;self.sequence=0
         self.state_pub=self.create_publisher(String,'rescue/state',10);self.result_pub=self.create_publisher(String,'rescue/result',100)
         self.create_subscription(String,'rescue/command',self.command,20)
@@ -317,7 +347,7 @@ class RescueRuntime(Node):
             if result:self.publish_result(result)
     def raw_sample(self,key,msg):
         stamp=msg.header.stamp.sec+msg.header.stamp.nanosec/1e9
-        if not 0<=self.clock()-stamp<=1.0:return
+        if not 0<=self.clock()-stamp<=self.data_age:return
         self.raw[key]=(msg,stamp)
         if key=='platform':
             # PX4's own OFFBOARD flag (vehicle_control_mode): a change in flight that AS2 did not
@@ -334,7 +364,8 @@ class RescueRuntime(Node):
         now=self.clock();rx=[t for t in self.imu_rx if 0<=now-t<=1.0]
         newest=now-self.imu_rx[-1] if self.imu_rx else float('nan')
         ticks=list(self.tick_at);gap=max((b-a for a,b in zip(ticks,ticks[1:])),default=float('nan'))
-        return ' [IMU %d/s received, newest %.2f s old; longest tick gap %.2f s]'%(len(rx),newest,gap)
+        ages=', '.join('%s %.2f s'%(k,now-self.raw[k][1]) if k in self.raw else '%s never'%k for k in ('pose','twist','platform'))
+        return ' [IMU %d/s received, newest %.2f s old; longest tick gap %.2f s; ages: %s]'%(len(rx),newest,gap,ages)
     def vision_frame(self,msg):
         try:frame=json.loads(msg.data)
         except ValueError:return
@@ -372,7 +403,7 @@ class RescueRuntime(Node):
             else:self.evidence.put('track',{},self.clock())
         except (ValueError,TypeError,KeyError):pass
     def vehicle(self):
-        if any(k not in self.raw or not 0<=self.clock()-self.raw[k][1]<=1.0 for k in ('pose','twist','imu','platform')):return
+        if any(k not in self.raw or not 0<=self.clock()-self.raw[k][1]<=self.data_age for k in ('pose','twist','imu','platform')):return
         pose=self.raw['pose'][0];twist=self.raw['twist'][0];imu=self.raw['imu'][0];platform=self.raw['platform'][0]
         fraction=None
         if 'battery' in self.raw and 0<=self.clock()-self.raw['battery'][1]<=.5:
@@ -394,6 +425,10 @@ class RescueRuntime(Node):
             body_rate_dps=math.degrees(math.sqrt(w.x*w.x+w.y*w.y+w.z*w.z)),tilt_rate_dps=math.degrees(math.hypot(w.x,w.y)),vibration_rms=vibration,
             hold_ack=self.driver.hover_ok,motion_idle=self.driver.idle,armed=platform.armed,platform_state=platform.status.state,
             offboard=platform.offboard)
+        if self.failsafe and 0<=self.clock()-self.failsafe[1]<=1.5 and getattr(self.failsafe[0],'timestamp',0):
+            # PX4's own clock (published at least every 0.5 s): simulation time in SITL. Take-off
+            # waits run on it so a slow simulation does not stop a take-off that is spooling up.
+            value['fc_time_s']=self.failsafe[0].timestamp/1e6
         self.evidence.put('vehicle',value,min(self.raw[k][1] for k in ('pose','twist','imu','platform')))
     def reconcile_ground(self,request,response):
         try:

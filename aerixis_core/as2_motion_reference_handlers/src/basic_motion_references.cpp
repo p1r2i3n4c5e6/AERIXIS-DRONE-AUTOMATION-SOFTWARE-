@@ -132,6 +132,12 @@ bool BasicMotionReferenceHandler::sendThrustCommand()
   return true;
 }
 
+namespace
+{
+constexpr int kSetModeAttempts = 3;
+constexpr std::chrono::seconds kSetModeResponseTimeout{3};
+}  // namespace
+
 bool BasicMotionReferenceHandler::setMode(const as2_msgs::msg::ControlMode & mode)
 {
   RCLCPP_INFO(
@@ -150,7 +156,18 @@ bool BasicMotionReferenceHandler::setMode(const as2_msgs::msg::ControlMode & mod
   auto set_mode_cli = as2::SynchronousServiceClient<as2_msgs::srv::SetControlMode>(
     namespace_ + set_mode_service, node_ptr_);
 
-  bool out = set_mode_cli.sendRequest(request, response);
+  // A response lost on a loaded computer used to block here for good, so the behaviour never
+  // sent a reference and ignored its cancel (SITL 2026-11-01: armed on the ground in
+  // TAKING_OFF). Wait a bounded time and ask again: setting the same mode twice is harmless.
+  bool out = false;
+  for (int attempt = 1; attempt <= kSetModeAttempts && !out && rclcpp::ok(); ++attempt) {
+    out = set_mode_cli.sendRequest(request, response, 0, kSetModeResponseTimeout);
+    if (!out) {
+      RCLCPP_WARN(
+        node_ptr_->get_logger(), "No answer to the control mode request (attempt %d of %d)",
+        attempt, kSetModeAttempts);
+    }
+  }
 
   if (out && response.success) {
     shared_->current_mode_ = mode;

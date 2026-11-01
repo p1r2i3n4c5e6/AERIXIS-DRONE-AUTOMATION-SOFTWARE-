@@ -70,9 +70,27 @@ def separation_safe(own, peers, now, min_separation, max_age):
         if not isinstance(sigma, (int, float)) or not math.isfinite(sigma) or sigma < 0:
             return False
         margin = pair_margin(min_separation, own['sigma_m'], own.get('speed', 0.0), sigma, p.get('speed', 0.0), age)
-        if math.dist(own['position'], position) < margin:
+        if math.dist(own['position'], position) < margin and not vertically_separated(own, p, age):
             return False
     return True
+
+
+# Height layers (2026-11-01): search drones and delivery drones fly at different heights. Two drones
+# are also separated when their heights differ by this much plus what their climb/descent rates
+# could close during the data age (the common origin makes the heights comparable).
+VERTICAL_SEPARATION_M = 4.0
+
+
+def vertically_separated(own, peer, age):
+    import math
+    try:
+        gap = abs(float(own['position'][2]) - float(peer['position'][2]))
+        vz = [abs(float(d['vz'])) for d in (own, peer)]     # a peer without vz: not separated
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+    if not math.isfinite(gap) or not all(math.isfinite(v) for v in vz):
+        return False
+    return gap >= VERTICAL_SEPARATION_M + (vz[0] + vz[1]) * (max(age, 0.0) + 0.5)
 
 
 def supervisor_allows_renewal(supervisor, now):

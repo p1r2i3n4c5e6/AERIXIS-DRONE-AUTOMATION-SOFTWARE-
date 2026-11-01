@@ -19,6 +19,12 @@ from .swarm import pair_margin
 LOOKAHEAD_M = 6.0
 REACHED_M = 1.5
 REACHED_Z_M = 0.8
+# A goal on the planning area's edge cannot be reached closer than the shield's edge margin
+# (orca.AREA_MARGIN_M 1.5 m). SITL 2026-11-01: a lane end at x=140 on the edge held the drone at
+# 2 m for 10 minutes until the mission timed out. Close to the goal and held still -> reached.
+STALL_REACH_M = 4.0
+STALL_SPEED_MPS = 0.3
+STALL_TIME_S = 3.0
 CORRIDOR_M = 20.0          # never further than this from the planned leg line
 GATE_BUFFER_M = 1.0
 # The velocity command changes by at most this (m/s per s). SITL 2026-10-23: the AI return reversed
@@ -113,6 +119,12 @@ class AvoidanceLayer:
         cross = ux * (p[1] - ay) - uy * (p[0] - ax)                 # + = left of the leg
         remaining = math.hypot(goal[0] - p[0], goal[1] - p[1])
         reached = remaining < REACHED_M and abs(goal[2] - p[2]) < REACHED_Z_M
+        planar = math.hypot(vehicle['velocity'][0], vehicle['velocity'][1])
+        if not reached and remaining < STALL_REACH_M and abs(goal[2] - p[2]) < REACHED_Z_M and planar < STALL_SPEED_MPS:
+            cmd.setdefault('stall_since', now)
+            reached = now - cmd['stall_since'] >= STALL_TIME_S
+        else:
+            cmd.pop('stall_since', None)
         target_along = min(length, max(0.0, along) + LOOKAHEAD_M)
         tx, ty = ax + ux * target_along, ay + uy * target_along
         dx, dy = tx - p[0], ty - p[1]

@@ -12,6 +12,23 @@ MOTION_WAIT_S=5.0     # a vertical action waits this long for the previous motio
 ARM_WAIT_S=8.0        # take-off fails when the FC is still disarmed after this
 CLIMB_WAIT_S=20.0     # ... or has not climbed CLIMB_MIN_M after this
 CLIMB_MIN_M=0.5
+# The two waits above run on the flight controller's own clock when it is known (vehicle
+# evidence fc_time_s). SITL 2026-11-01: Gazebo ran at 0.5x real time under a 4-drone load, so 20 s
+# on the companion's clock was 7 s for PX4, which was still spooling up; the drone was lifting
+# off when the take-off was stopped. On a real FC both clocks agree. A frozen FC clock cannot
+# hold the take-off forever: the wall clock still ends it after this many times the wait.
+FC_CLOCK_LIMIT=3.0
+# A return/landing that cannot start because flight-controller data is momentarily missing waits
+# this long for it before failing (then the tree's hold-and-ask-the-operator step runs).
+RECOVERY_DATA_WAIT_S=5.0
+# Fleet missions: a short gap in peer data (a late mesh frame, or the swarm agent's status pausing on
+# a loaded computer) holds position instead of ending the search (SITL 2026-11-01: a single 1 s gap
+# ended drone1's search after 2 of 9 lanes, twice). Only after a fresh and separation-safe state; a
+# gap longer than this, or fresh data that says "too close", still fails at once.
+PEER_GAP_HOLD_S=5.0
+SWARM_STATUS_AGE_S=1.5
+DATA_GAP_REASONS=('Fresh valid aircraft position required','Position/connection unavailable for return',
+                  'Vehicle readiness lost')
 ROUTE_REFUSED_S=5.0   # a leg the route check keeps refusing fails with the reason after this
 MOTION_STUCK_S=15.0   # a leg fails when the previous motion has not handed back after this
 # While another mode flies the aircraft, the AS2 hover reference is re-frozen at the measured
@@ -69,9 +86,10 @@ class Engine:
         self.home=dict(position=list(vehicle['position']),yaw=vehicle.get('yaw'),frame_id=vehicle.get('frame_id'))
         self.journal.state.setdefault('home',{})[self.owner or '']=self.home;self.journal.save()
     def flags(self):
-        flags=self.safety.evaluate();swarm=self.evidence.get('swarm');payload=self.evidence.get('payload')
+        flags=self.safety.evaluate();swarm=self.evidence.get('swarm',SWARM_STATUS_AGE_S);payload=self.evidence.get('payload')
+        fresh,safe,gap=self.peer_state(swarm)
         flags.update(AssignmentOwned=bool(swarm and swarm.get('owned') and swarm.get('target_id')==self.target and swarm.get('mission_id')==self.swarm_id),
-            PeersFresh=bool(swarm and swarm.get('peers_fresh')),SeparationSafe=bool(swarm and swarm.get('separation_safe')),
+            PeersFresh=fresh,SeparationSafe=safe,PeerGapHold=gap,
             PayloadReleased=bool(self.last_release and self.journal.state['releases'][self.last_release]['state']=='CONFIRMED'))
         track=self.evidence.get('track')
         flags['RescuePending']=bool(flags['TrackConfirmed'] and track and track['track_id'] not in self.handled)
@@ -116,6 +134,34 @@ class Engine:
         if not leg or not saved or not position or getattr(self,'leg_is_entry',False):return saved
         (ax,ay,_),(bx,by,_)=leg;t=max(self.leg_fraction(saved),self.leg_fraction(position))
         return [ax+t*(bx-ax),ay+t*(by-ay),saved[2]]
+    def peer_state(self,swarm):
+        """(PeersFresh, SeparationSafe, PeerGapHold): raw swarm flags, kept true for up to
+        PEER_GAP_HOLD_S of missing/stale peer data after a fresh, safe state (the legs hold
+        position meanwhile, see PeerGapHold)."""
+        now=self.clock()
+        fresh=bool(swarm and swarm.get('peers_fresh'));safe=bool(swarm and swarm.get('separation_safe'))
+        if swarm and swarm.get('required'):self.peer_required=True
+        if fresh:
+            self.peer_gap_since=None;self.peer_last_safe=safe
+            return fresh,safe,False
+        if not getattr(self,'peer_required',False) or not getattr(self,'peer_last_safe',False):
+            return False,False,False
+        if getattr(self,'peer_gap_since',None) is None:self.peer_gap_since=now
+        if now-self.peer_gap_since<PEER_GAP_HOLD_S:
+            return True,True,True
+        self.peer_last_safe=False
+        return False,False,False
+
+    def takeoff_waited(self,cmd,now,ground):
+        """Seconds since the take-off was commanded, on the flight controller's clock when the
+        vehicle evidence carries it (see FC_CLOCK_LIMIT), else on this computer's clock."""
+        wall=now-cmd.get('vertical_at',now)
+        fc=ground.get('fc_time_s')
+        if not isinstance(fc,(int,float)) or not math.isfinite(fc):return wall
+        cmd.setdefault('vertical_fc',fc)
+        if fc<cmd['vertical_fc']:cmd['vertical_fc']=fc     # FC rebooted: count from here
+        if wall>=FC_CLOCK_LIMIT*CLIMB_WAIT_S:return wall
+        return max(0.0,min(wall,fc-cmd['vertical_fc']))
     def motion_ready(self):
         return self.driver.idle and getattr(self.driver,'hover_future',None) is None
     def finish(self,status,reason=''):
@@ -155,6 +201,7 @@ class Engine:
                 except ValueError:pass
             if self.owner and self.owner!=mission:
                 raise ValueError('Runtime belongs to another mission; reconcile/restart on the ground before reassignment')
+        if self.owner!=mission:self.peer_required=False;self.peer_gap_since=None;self.peer_last_safe=False
         if self.owner!=mission:self.vision.search_area=None;self.vision.release_claim();self.vision.yielded=None;self.vision.handled_points=[];self.vision.served_points=[];self.vision.delivered=None
         if command['operation']!='ScanArea':self.vision.watch=None  # a stopped-short station leg hands its note to ScanArea
         if command['operation'] in ('ReturnToLaunch','ManagedLand','RequestRecovery'):self.vision.release_claim()
@@ -253,7 +300,7 @@ class Engine:
                     # SITL 2026-10-23: PX4 refused to arm (pre-flight checks) but the AS2 platform
                     # reported ARM and the take-off behaviour ran for 90 s on the ground. Use the
                     # FC's own state: not armed, or no climb, ends the take-off within seconds.
-                    waited=now-cmd.get('vertical_at',now)
+                    waited=self.takeoff_waited(cmd,now,ground)
                     if ground.get('armed') is False and waited>=ARM_WAIT_S:
                         raise ValueError('FC did not arm within %.0f s (PX4 pre-flight checks failed or arming refused): '
                                          'check the FC health before starting again'%ARM_WAIT_S)
@@ -273,9 +320,15 @@ class Engine:
                     return self.finish('SUCCESS')
             elif op in ('SurveyWaypoint','ApproachDeliveryZone','ResumeCoverage'):
                 if not flags['VehicleHealthy']:raise ValueError('Vehicle readiness lost')
-                swarm=self.evidence.get('swarm')
-                if cmd.get('swarm_required') or (swarm and swarm.get('required')):
+                swarm=self.evidence.get('swarm',SWARM_STATUS_AGE_S)
+                if cmd.get('swarm_required') or (swarm and swarm.get('required')) or getattr(self,'peer_required',False):
                     if not flags['PeersFresh'] or not flags['SeparationSafe']:raise ValueError('Peer freshness/separation unavailable')
+                    if flags['PeerGapHold']:
+                        # Hover until peer data is fresh again; the leg is sent again afterwards.
+                        if cmd['started']:
+                            self.driver.stop();cmd['started']=False
+                        self.waiting='holding position: peer data %.1f s old'%(now-self.peer_gap_since)
+                        return None
                 if op=='ApproachDeliveryZone':
                     if not all(flags[k] for k in ('GimbalStable','TrackConfirmed','GeolocationValid','AssignmentOwned','DeliveryZoneClear')):raise ValueError('Approach gate lost; stop and reacquire')
                     zone=self.evidence.get('zone');pose=zone.get('approach_position');frame=zone.get('frame_id')
@@ -424,6 +477,14 @@ class Engine:
                 return self.finish('SUCCESS')
             else:raise ValueError('Unsupported rescue operation: '+op)
         except (ValueError,KeyError,TypeError,IndexError) as exc:
+            if (op in FLIGHT_RECOVERY_OPS and not cmd.get('started') and isinstance(exc,ValueError)
+                    and str(exc) in DATA_GAP_REASONS):
+                # SITL 2026-11-01: a 1 s data gap cancelled a take-off at 7 m; ReturnToLaunch then
+                # failed on its first tick for the same gap (readiness was back 0.3 s later) and the
+                # drone was left hovering. A return or landing waits briefly for fresh data first.
+                cmd.setdefault('data_wait',now)
+                if now-cmd['data_wait']<RECOVERY_DATA_WAIT_S:
+                    self.waiting='%s: waiting for fresh flight-controller data'%op;return None
             self.driver.stop();self.driver.track(None)
             if op=='ReleasePayload' and self.last_release:
                 self.journal.release_result(self.last_release);self.aborted=True
@@ -440,7 +501,7 @@ class Engine:
             raise ValueError('Fresh connected, disarmed, stationary ground evidence and idle runtime required')
         self.journal.reconcile_runtime()
         self.recovery_required=False;self.aborted=False;self.safety.abort_reason=''
-        self.owner=None;self.target=None;self.swarm_id='';self.last_segment=''
+        self.owner=None;self.target=None;self.swarm_id='';self.last_segment='';self.peer_required=False;self.peer_gap_since=None;self.peer_last_safe=False
         self.last_release=None;self.incident_track=None;self.handled.clear();self.results.clear()
         self.handled_labels.clear();self.incident_label=None;self.home=None;self.leg=None;self.last_goal=None;self.vision.search_area=None
         self.vision.handled_points=[];self.vision.served_points=[];self.vision.delivered=None;self.vision.watch=None;self.mode_change=None;self.external=False;self.offboard_seen=False

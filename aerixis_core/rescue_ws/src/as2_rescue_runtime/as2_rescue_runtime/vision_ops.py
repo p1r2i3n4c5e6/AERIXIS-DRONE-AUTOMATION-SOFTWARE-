@@ -242,6 +242,11 @@ CENTRED = 0.2
 # A person just accepted as a detection is not released by housekeeping for this long, so a
 # noisy estimate cannot drop the lock between the detection and the response binding it.
 DETECTION_HOLD_S = 5.0
+# After a geotag the camera goes straight back to searching (user request 2026-11-01): the tracker
+# pauses new selections for at most this long (the tree's suppress_s is the upper limit). A re-lock
+# on the person just geotagged is rejected by housekeeping on its first frame, not after centring.
+POST_TAG_SUPPRESS_S = 1.5
+REJECT_SUPPRESS_S = 1.0
 # Mission 2 watch: without a clear station to watch from (holding, re-stationing) for this long
 # in total, ScanArea fails and the mission returns home. A peer's 2-lap orbit takes ~2-3 min.
 WATCH_HOLD_S = 240.0
@@ -550,8 +555,14 @@ class VisionOps:
         engine = self.engine
         op = (engine.active or {}).get('operation')
         leg = getattr(engine, 'leg', None)
+        if op not in (None, 'SurveyWaypoint', 'ResumeCoverage'):
+            return None
         coverage = leg is not None or getattr(engine, 'last_goal', None) is not None
-        if not coverage or op not in (None, 'SurveyWaypoint', 'ResumeCoverage'):
+        if leg is None and getattr(engine, 'last_goal', None) is None and getattr(engine, 'home', None) is not None:
+            # Taken off (home recorded) but the first lane leg has not even started (SITL 2026-11-01:
+            # a person 41 m away drew a diagonal flight straight from the take-off spot).
+            return 'on the way to the first lane'
+        if not coverage:
             return None
         if op == 'SurveyWaypoint' and getattr(engine, 'leg_is_entry', False):
             return 'on the way to the first lane'
@@ -600,12 +611,15 @@ class VisionOps:
             self.look_away()
             self.release_cooldown = now + 4.0
             return
-        if vision['label'] in self.engine.handled_labels or (estimate and (
-                self.excluded(estimate[0]) or self.outside(estimate[0]) or self.peer_claim_at(estimate[0]))):
-            # Drop it and look away: otherwise the gimbal keeps staring at the same person and
-            # the tracker re-selects them instead of anyone new below the aircraft.
-            self.look_away()
-            self.release_cooldown = now + 4.0
+        # Any lock, centred or not: SITL 2026-11-01 the camera re-locked the person it had just
+        # geotagged and slewed after them for seconds, because the check waited for centring.
+        loose = estimate or self.estimate(vehicle, vision)
+        if vision['label'] in self.engine.handled_labels or (loose and (
+                self.excluded(loose[0]) or self.outside(loose[0]) or self.peer_claim_at(loose[0]))):
+            # Drop it and look away at once: otherwise the gimbal keeps staring at the same person
+            # and the tracker re-selects them instead of anyone new below the aircraft.
+            self.look_away(REJECT_SUPPRESS_S)
+            self.release_cooldown = now + REJECT_SUPPRESS_S
 
     def lost(self, cmd, vision, now):
         """True once the selection has been missing for longer than lost_timeout_s."""
@@ -643,7 +657,7 @@ class VisionOps:
         progress (approach, orbit laps) pauses and resumes from where it was."""
         swarm = self.ev.get('swarm', 1.0)
         required = bool(cmd.get('swarm_required') or (swarm and swarm.get('required')))
-        if not required or (flags['PeersFresh'] and flags['SeparationSafe']):
+        if not required or (flags['PeersFresh'] and flags['SeparationSafe'] and not flags.get('PeerGapHold')):
             if cmd.pop('sep_hold_since', None) is not None:
                 self.hold = None
                 cmd.pop('last_angle', None)   # do not count the hold as orbit progress
@@ -1078,8 +1092,11 @@ class VisionOps:
             # this person as new once the claim is gone.
             self.handled_points = (self.handled_points + [[round(point[0], 1), round(point[1], 1)]])[-20:]
         self.release_claim()
-        self.engine.driver.vision_command(dict(cmd='release', suppress_s=cmd.get('suppress_s') or 8.0))
-        self.release_cooldown = now + 2.0
+        # Straight back to the search attitude; new people may be selected again after a short
+        # pause (POST_TAG_SUPPRESS_S), the person just handled is rejected by housekeeping.
+        suppress = min(float(cmd.get('suppress_s') or POST_TAG_SUPPRESS_S), POST_TAG_SUPPRESS_S)
+        self.look_away(suppress)
+        self.release_cooldown = now + suppress
         return self.engine.finish('SUCCESS', 'Released %s' % (label or 'selection'))
 
     def op_SetGimbalSearch(self, cmd, flags, now):

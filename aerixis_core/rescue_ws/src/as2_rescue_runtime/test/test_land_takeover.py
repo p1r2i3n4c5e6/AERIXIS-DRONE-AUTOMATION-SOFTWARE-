@@ -48,6 +48,36 @@ class LandTakeoverTests(unittest.TestCase):
         self.assertEqual(self.d.abandoned, 0)
         self.assertEqual(result['status'], 'FAILURE')
 
+    def test_return_waits_out_a_short_data_gap(self):
+        # SITL 2026-11-01: ReturnToLaunch failed on its first tick during a 1 s data gap (fresh
+        # again 0.3 s later) and the drone was left hovering at 7 m.
+        self.step()
+        self.engine.home = dict(position=[30.0, 0.0, 0.0])
+        self.clock.value += 1.5                                  # vehicle evidence now stale
+        self.command('ReturnToLaunch', speed=2.0)
+        self.assertIsNone(self.engine.tick())
+        self.assertIn('fresh flight-controller data', self.engine.waiting)
+        self.clock.value += 1.0
+        self.assertIsNone(self.engine.tick())
+        self.step()                                              # data back
+        self.assertIsNone(self.engine.tick())
+        self.assertTrue(self.moves())                            # flying home
+
+    def test_return_still_fails_when_the_data_does_not_come_back(self):
+        from as2_rescue_runtime.engine import RECOVERY_DATA_WAIT_S
+        self.step()
+        self.engine.home = dict(position=[30.0, 0.0, 0.0])
+        self.clock.value += 1.5
+        self.command('ReturnToLaunch', speed=2.0)
+        result = None
+        for _ in range(int(RECOVERY_DATA_WAIT_S / 0.5) + 2):
+            result = self.engine.tick()
+            if result:
+                break
+            self.clock.value += 0.5
+        self.assertEqual(result['status'], 'FAILURE')
+        self.assertIn('Fresh valid aircraft position', result['reason'])
+
 
 if __name__ == '__main__':
     unittest.main()

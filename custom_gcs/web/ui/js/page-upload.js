@@ -56,6 +56,7 @@ export const page = {
       if (action === 'stage') {
         const a = store.assigned.get(id); if (!a) throw new Error('No tree for this drone yet — plan one in step 3 or choose an XML file.');
         body.xml = a.xml; body.sha256 = await sha256(a.xml);
+        body.gcs_label = a.label || '';   // mission name for the GCS mission archive (not sent onboard)
         if (a.bundle) body.route_bundle = a.bundle;
         // The mission's RTL/LAND choice for the onboard FC guardian (handed over at start).
         if (a.emergency_action) body.emergency_action = a.emergency_action;
@@ -75,7 +76,7 @@ export const page = {
       this.busy.add(id); ui.progress.style.display = ''; this.update(store);
       await api('/api/fleet/command', body);
       toast(`${d.label}: ${{ stage: 'tree validated onboard', start: 'mission started', cancel: 'cancel requested', reconcile: 'ground state verified' }[action]}`, action === 'start' ? 'Follow it in Operations (step 5).' : '', 'ok');
-      if (action === 'start') { this.started.add(id); this.simCameras([id]); setTimeout(() => { location.hash = '#live'; }, 800); }
+      if (action === 'start') { this.started.add(id); this.packageSpent(id); this.simCameras([id]); setTimeout(() => { location.hash = '#live'; }, 800); }
     } catch (e) { toast(`${d.label}: ${action} failed`, e.message, 'bad', 10000); }
     finally { this.busy.delete(id); ui.progress.style.display = 'none'; this.update(store); }
   },
@@ -107,8 +108,14 @@ export const page = {
     }
     if (!ids.length) return toast('Nothing to upload', 'Plan trees in step 3 first.', 'warn');
     if (action === 'start' && !(await confirmDialog(`Start ${ids.length} drone(s)?`, 'All selected drones arm, take off and fly autonomously.', { ok: 'Start all', kind: 'go' }))) return;
-    for (const id of ids) { if (action === 'start') { const d = store.drone(id); await api('/api/fleet/command', { drone_id: id, action, mission_id: d.data.mission.id, revision: d.data.mission.revision, command_id: crypto.randomUUID() }).then(() => { this.started.add(id); toast(`${id}: started`, '', 'ok'); }).catch(e => toast(`${id}: start failed`, e.message, 'bad')); } else await this.act(id, action); }
+    for (const id of ids) { if (action === 'start') { const d = store.drone(id); await api('/api/fleet/command', { drone_id: id, action, mission_id: d.data.mission.id, revision: d.data.mission.revision, command_id: crypto.randomUUID() }).then(() => { this.started.add(id); this.packageSpent(id); toast(`${id}: started`, '', 'ok'); }).catch(e => toast(`${id}: start failed`, e.message, 'bad')); } else await this.act(id, action); }
     if (action === 'start') this.simCameras(ids.filter(id => this.started.has(id)));
+  },
+  /** A started mission owns its package ID: the next load gets a new one. SITL 2026-11-01: the
+   *  field kept the last ID, a re-run reused it and the drone (rightly) refused the packages. */
+  packageSpent(id) {
+    const ui = this.cards.get(id);
+    if (ui?.payloadVisible) { ui.payloadId.value = ''; this.update(store); }
   },
   /** Simulation: open the drone camera window when a started mission uses the camera. */
   simCameras(ids) {
@@ -145,7 +152,7 @@ export const page = {
         // Every load needs a new package ID (the drone refuses one used in an earlier mission).
         if (ui.payloadVisible && !ui.payloadId.value.trim()) {
           const t = new Date(), p2 = n => String(n).padStart(2, '0');
-          ui.payloadId.value = `kit_${d.drone_id}_${t.getFullYear()}${p2(t.getMonth() + 1)}${p2(t.getDate())}_${p2(t.getHours())}${p2(t.getMinutes())}`;
+          ui.payloadId.value = `kit_${d.drone_id}_${t.getFullYear()}${p2(t.getMonth() + 1)}${p2(t.getDate())}_${p2(t.getHours())}${p2(t.getMinutes())}${p2(t.getSeconds())}`;
         }
         if (ui.payloadVisible && pay?.capacity) ui.payloadCount.value = Math.min(pay.capacity, Math.max(1, +ui.payloadCount.value === 1 ? pay.capacity : +ui.payloadCount.value));
         ui.payloadCap.textContent = pay ? (pay.capacity ? `Drone set-up: ${pay.capacity} package${pay.capacity === 1 ? '' : 's'} on ${pay.servos.length} servo${pay.servos.length === 1 ? '' : 's'} (${pay.servos.map(s => `set ${s.set} × ${s.drops}`).join(', ')}).` : 'This drone reports no payload servo: set one on its control panel.') : 'Payload set-up not reported by this drone yet.';

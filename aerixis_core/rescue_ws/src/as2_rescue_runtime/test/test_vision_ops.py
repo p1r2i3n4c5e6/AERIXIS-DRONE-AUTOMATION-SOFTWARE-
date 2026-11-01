@@ -231,7 +231,9 @@ class EngineVisionTests(unittest.TestCase):
         self.assertAlmostEqual(tag['latitude'], 47.0, places=4)
         self.command('ReleaseTargetLock')
         self.assertEqual(self.engine.tick()['status'], 'SUCCESS')
-        self.assertIn(('vision', dict(cmd='release', suppress_s=8.0)), self.d.calls)
+        # Straight back to searching (2026-11-01): a short pause, not the tree's 8 s.
+        self.assertIn(('vision', dict(cmd='release', suppress_s=1.5)), self.d.calls)
+        self.assertIn(('vision', dict(cmd='set_attitude', yaw=0.0, pitch=self.engine.vision.search_pitch)), self.d.calls)
         # Same label is handled; a new label right next to the geotag is excluded too.
         self.step()
         self.put(pitch=-90, label='L1')
@@ -241,6 +243,25 @@ class EngineVisionTests(unittest.TestCase):
         self.step()
         self.put(position=(60, 0, 10), pitch=-45, label='L3')
         self.assertTrue(self.engine.flags()['HumanDetected'])
+
+    def test_a_relock_on_the_geotagged_person_is_dropped_before_it_is_centred(self):
+        # SITL 2026-11-01: after the geotag the tracker re-selected the same person and the camera
+        # slewed after them for seconds (the check waited for a centred image).
+        self.put(pitch=-90)
+        self.assertEqual(self.geotag(pitch=-90)['status'], 'SUCCESS')
+        self.command('ReleaseTargetLock')
+        self.assertEqual(self.engine.tick()['status'], 'SUCCESS')
+        self.step(2.0)
+        self.d.calls.clear()
+        self.put(position=(2, 0, 10), pitch=-80, label='L2', err=(-0.5, 0.3))   # far from centred
+        self.engine.vision.housekeeping(self.clock())
+        self.assertIn(('vision', dict(cmd='release', suppress_s=1.0)), self.d.calls)
+        # Someone new is kept.
+        self.step(2.0)
+        self.d.calls.clear()
+        self.put(position=(60, 0, 10), pitch=-80, label='L3', err=(-0.5, 0.3))
+        self.engine.vision.housekeeping(self.clock())
+        self.assertFalse(any(c[0] == 'vision' and c[1].get('cmd') == 'release' for c in self.d.calls))
 
     def test_geotag_fuses_samples_and_drops_an_outlier(self):
         self.put(pitch=-90)
@@ -522,6 +543,14 @@ class EngineVisionTests(unittest.TestCase):
         self.on_leg((0, 0, 10), (50, 0, 10))
         self.put(position=(10, 0, 10), pitch=-60.0, gyaw=90.0)    # looking sideways, abeam
         self.assertTrue(self.engine.vision.human_detected())
+
+    def test_no_response_between_take_off_and_the_first_lane(self):
+        # SITL 2026-11-01: no leg and no completed lane yet (the moment after take-off).
+        self.engine.active = None; self.engine.leg = None; self.engine.last_goal = None
+        self.engine.home = dict(position=[0, 0, 0], yaw=0.0, frame_id='earth')   # taken off
+        self.put(position=(0, 0, 15), pitch=-60.0)                # a person 9 m away
+        self.assertFalse(self.engine.vision.human_detected())
+        self.assertIn('first lane', self.engine.vision.deferred)
 
     def test_watch_and_other_ops_are_not_lane_gated(self):
         self.put(position=(0, 0, 10), pitch=-50.0)

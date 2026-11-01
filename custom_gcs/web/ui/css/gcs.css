@@ -952,3 +952,79 @@ html.oc-open .app{transform:scale(.965);filter:blur(4px) saturate(.8);opacity:.3
 /* Mission 7 roles: search (pink) / delivery (amber) */
 .role-chip.search{--c:#ec5fa0}.role-chip.delivery{--c:#f0a12c}
 .role-chip{font:inherit;font-size:12.5px;font-weight:600;color:inherit}
+
+/* Mission time (Operations, 2026-11-01): whole mission + each drone, from the GCS mission archive. */
+.mission-time:empty { display: none; }
+.mission-time { margin: 0 10px 8px; padding: 8px 10px; border-radius: 12px; background: linear-gradient(135deg, rgba(56,189,248,.14), rgba(167,139,250,.12)); border: 1px solid rgba(125,211,252,.25); }
+.mission-time .mt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.mission-time .mt-clock { margin-left: auto; font: 700 20px/1 'JetBrains Mono', monospace; letter-spacing: .5px; }
+.mission-time .mt-clock.small { font-size: 14px; }
+.mission-time .mt-drones { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.mission-time .mt-drone { display: inline-flex; align-items: center; gap: 4px; font: 500 11.5px 'JetBrains Mono', monospace; padding: 2px 7px; border-radius: 8px; background: rgba(255,255,255,.06); }
+.archive-row { display: grid; grid-template-columns: 110px 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,.04); margin-bottom: 6px; }
+.archive-row .mt-clock { font: 700 15px 'JetBrains Mono', monospace; }
+
+/* Offline AI mission planner (Plan page, 2026-11-01) */
+.ai-card .ai-status { display: block; font-size: 11.5px; margin: -2px 0 8px; }
+.ai-log { max-height: 300px; min-height: 90px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 4px 2px; }
+.ai-msg { max-width: 88%; padding: 7px 10px; border-radius: 12px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; }
+.ai-msg.user { align-self: flex-end; background: linear-gradient(135deg, rgba(155,108,246,.35), rgba(79,141,247,.3)); border-bottom-right-radius: 4px; }
+.ai-msg.assistant { align-self: flex-start; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.08); border-bottom-left-radius: 4px; }
+.ai-msg.error { border-color: rgba(229,72,77,.6); }
+.ai-msg.thinking { opacity: .7; animation: ai-pulse 1s ease-in-out infinite; }
+@keyframes ai-pulse { 50% { opacity: .3; } }
+.ai-row { display: flex; gap: 8px; align-items: flex-end; margin-top: 8px; }
+.ai-input { flex: 1; resize: vertical; min-height: 40px; border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 13px; background: rgba(0,0,0,.18); color: inherit; border: 1px solid rgba(255,255,255,.12); }
+.ai-plan:empty { display: none; }
+.ai-plan { margin-top: 10px; padding: 8px 10px; border-radius: 10px; background: rgba(34,176,125,.08); border: 1px solid rgba(34,176,125,.3); display: grid; gap: 3px; }
+.ai-warn { font-size: 12px; color: #f0a12c; }
+
+/* AERIXIS Copilot — floating mission-planning chat (2026-11-01) */
+.copilot { position: fixed; right: 22px; bottom: 22px; z-index: 900; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; pointer-events: none; }
+.copilot > * { pointer-events: auto; }
+.copilot-fab { width: 66px; height: 66px; border-radius: 50%; border: 1px solid rgba(160,200,255,.45); cursor: pointer; padding: 6px;
+  background: radial-gradient(circle at 30% 25%, rgba(124,92,255,.55), rgba(10,18,45,.92) 70%); box-shadow: 0 10px 30px rgba(34,181,201,.35), 0 0 0 4px rgba(124,92,255,.15);
+  animation: copilot-float 3.2s ease-in-out infinite; transition: transform .2s; }
+.copilot-fab:hover { transform: scale(1.07); }
+.copilot-fab .robot { width: 100%; height: 100%; }
+.robot .rotors { transform-origin: 32px 16px; animation: copilot-spin .35s linear infinite alternate; }
+.robot .eye { animation: copilot-blink 4.5s infinite; transform-origin: center; transform-box: fill-box; }
+@keyframes copilot-float { 50% { transform: translateY(-5px); } }
+@keyframes copilot-spin { to { opacity: .55; } }
+@keyframes copilot-blink { 0%, 94%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.1); } }
+.copilot-bubble { max-width: 230px; padding: 9px 13px; border-radius: 14px 14px 4px 14px; font-size: 13px; font-weight: 600; cursor: pointer; color: #fff;
+  background: linear-gradient(135deg, #7c5cff, #22b5c9); box-shadow: 0 8px 24px rgba(0,0,0,.35); opacity: 0; transform: translateY(8px); transition: opacity .4s, transform .4s; }
+.copilot-bubble.show { opacity: 1; transform: none; }
+.copilot-bubble.gone, .copilot.open .copilot-bubble { opacity: 0; pointer-events: none; transform: translateY(8px); }
+.copilot-panel { display: none; width: min(430px, calc(100vw - 32px)); height: min(640px, calc(100vh - 120px)); flex-direction: column; border-radius: 18px; overflow: hidden;
+  background: rgba(12,20,44,.86); backdrop-filter: blur(16px) saturate(1.3); border: 1px solid rgba(150,190,255,.25); box-shadow: 0 20px 60px rgba(0,0,0,.5); color: #e8eefc; }
+.copilot.open .copilot-panel { display: flex; }
+.copilot-panel header { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: linear-gradient(135deg, rgba(124,92,255,.35), rgba(34,181,201,.25)); }
+.copilot-avatar { width: 38px; height: 38px; flex: none; }
+.copilot-avatar .robot { width: 100%; height: 100%; }
+.copilot-title { flex: 1; display: grid; line-height: 1.2; }
+.copilot-title .ai-status { font-size: 11px; opacity: .75; }
+.copilot-panel .icon-btn { background: rgba(255,255,255,.08); border: 0; color: inherit; width: 30px; height: 30px; border-radius: 8px; cursor: pointer; display: grid; place-items: center; }
+.copilot-panel .icon-btn svg { width: 15px; height: 15px; }
+.copilot-quick { display: flex; gap: 6px; padding: 8px 12px; flex-wrap: wrap; border-bottom: 1px solid rgba(255,255,255,.06); }
+.copilot-panel .ai-log { flex: 1; max-height: none; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.copilot-panel .ai-row { padding: 8px 12px 12px; margin: 0; }
+.copilot-panel .ai-send { height: 40px; }
+.ai-msg { max-width: 92%; padding: 8px 11px; border-radius: 12px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; }
+.ai-msg.user { align-self: flex-end; background: linear-gradient(135deg, rgba(155,108,246,.45), rgba(79,141,247,.4)); border-bottom-right-radius: 4px; }
+.ai-msg.assistant { align-self: flex-start; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.08); border-bottom-left-radius: 4px; }
+.ai-msg.error { border-color: rgba(229,72,77,.6); }
+.ai-msg.thinking { opacity: .7; animation: ai-pulse 1s ease-in-out infinite; }
+@keyframes ai-pulse { 50% { opacity: .3; } }
+.ai-row { display: flex; gap: 8px; align-items: flex-end; }
+.ai-input { flex: 1; resize: none; min-height: 40px; border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 13px; background: rgba(0,0,0,.25); color: inherit; border: 1px solid rgba(255,255,255,.14); }
+.ai-plan { margin-top: 8px; padding: 9px 10px; border-radius: 10px; background: rgba(34,176,125,.10); border: 1px solid rgba(34,176,125,.35); white-space: normal; }
+.ai-plan select, .ai-plan input[type=number] { background: rgba(0,0,0,.28); color: inherit; border: 1px solid rgba(255,255,255,.15); border-radius: 7px; padding: 3px 6px; font-size: 12px; min-width: 0; }
+.ai-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 8px; margin-top: 8px; }
+.ai-field { display: grid; gap: 2px; font-size: 11px; opacity: .92; }
+.ai-drones { margin-top: 8px; display: grid; gap: 4px; }
+.ai-drow { display: grid; grid-template-columns: 1.6fr 1fr 28px 64px; gap: 6px; align-items: center; font-size: 12px; }
+.ai-drow.head { font-size: 10.5px; opacity: .65; text-transform: uppercase; letter-spacing: .4px; }
+.ai-warn { font-size: 12px; color: #f0a12c; margin-top: 4px; }
+.ai-pick .fc-pick { max-height: 300px; overflow-y: auto; }
+@media (max-width: 600px) { .copilot { right: 12px; bottom: 12px; } .copilot-fab { width: 56px; height: 56px; } }

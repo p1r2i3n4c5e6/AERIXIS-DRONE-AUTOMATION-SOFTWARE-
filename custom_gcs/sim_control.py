@@ -21,6 +21,37 @@ RUN_ARENA = Path.home() / '.local/share/aerixis/run/arena.dir'
 PX4_LOG = Path.home() / '.local/share/aerixis/logs/px4.log'
 STATE_FILE = Path(__file__).parent / 'config/simulation.json'
 PX4_116 = Path.home() / 'px4_sitl/PX4-Autopilot-1.16'
+# Auto-stop (2026-11-01): once every simulated mission has ended and every drone is landed and
+# disarmed for this long, PX4 SITL + Gazebo + the onboard stacks are stopped.
+AUTO_STOP_GRACE_S = 60.0
+ON_GROUND_STATES = (0, 1)    # as2_msgs PlatformStatus DISARMED, LANDED
+
+
+def fleet_finished(drones):
+    """(all ended and on the ground, any mission running, why not) from a fleet snapshot.
+    A drone whose status is missing or stale is never taken as finished."""
+    if not drones:
+        return False, False, 'no simulated drones'
+    running = False
+    why = ''
+    for d in drones:
+        data = d.get('data') or {}
+        name = d.get('label') or d.get('drone_id')
+        if data.get('active'):
+            running = True
+            why = why or f'{name} is flying its mission'
+            continue
+        if not d.get('fresh'):
+            why = why or f'{name}: no fresh status'
+            continue
+        ros = data.get('ros') or {}
+        platform = ros.get('platform') or {}
+        age = ros.get('platform_age_s')
+        if not platform or age is None or age > 3:
+            why = why or f'{name}: armed state unknown'
+        elif platform.get('armed') or platform.get('state') not in ON_GROUND_STATES:
+            why = why or f'{name} is not landed and disarmed yet'
+    return not why, running, why
 
 
 class SimControl:
@@ -32,6 +63,71 @@ class SimControl:
         self.process = None
         self.last_action = 'start'
         self.settings = self._load()
+        self.settings.setdefault('auto_stop', True)
+        self._reset_auto()
+
+    # ---------- auto-stop after the missions ----------
+    def _reset_auto(self):
+        # mission_seen: a mission ran since this simulation started (a fresh, idle simulation is
+        # never stopped); skip: the operator chose "Keep running" for this simulation.
+        self.auto = dict(mission_seen=False, done_since=None, skip=False, waiting='')
+
+    def set_auto_stop(self, enabled):
+        with self.lock:
+            self.settings['auto_stop'] = bool(enabled)
+            self.auto['done_since'] = None
+            self._save()
+
+    def keep_running(self):
+        with self.lock:
+            self.auto.update(skip=True, done_since=None)
+
+    def auto_stop_tick(self, drones, sim_fleet, now=None):
+        """Called every few seconds with the fleet snapshot. Returns True when it stopped the
+        simulation."""
+        now = time.monotonic() if now is None else now
+        with self.lock:
+            enabled = self.settings.get('auto_stop', True) and not self.auto['skip']
+            # 'running' is only refreshed when the Connect page polls status(); a start/stop/add in
+            # progress is what matters here. Whether PX4 runs is checked just before stopping.
+            busy = self.state in ('starting', 'stopping', 'adding') or self.process is not None
+        if not enabled or busy or not sim_fleet:
+            with self.lock:
+                self.auto['done_since'] = None
+                self.auto['waiting'] = ''
+            return False
+        finished, running, why = fleet_finished(drones)
+        with self.lock:
+            if running:
+                self.auto['mission_seen'] = True
+            if not self.auto['mission_seen'] or not finished:
+                self.auto['done_since'] = None
+                self.auto['waiting'] = why if self.auto['mission_seen'] else ''
+                return False
+            if self.auto['done_since'] is None:
+                self.auto['done_since'] = now
+            self.auto['waiting'] = ''
+            due = now - self.auto['done_since'] >= AUTO_STOP_GRACE_S
+            if due:
+                self.auto['done_since'] = None   # one stop; a failed stop is retried after another grace
+        if due and not self.running_components().get('px4'):
+            return False
+        if due:
+            self.stop(reason='All missions ended and every drone is landed and disarmed: '
+                             'simulation stopped automatically')
+        return due
+
+    def auto_status(self, now=None):
+        with self.lock:
+            return self.auto_status_locked(now)
+
+    def auto_status_locked(self, now=None):
+        """Auto-stop state for the GCS panel (caller holds self.lock)."""
+        now = time.monotonic() if now is None else now
+        since = self.auto['done_since']
+        return dict(enabled=bool(self.settings.get('auto_stop', True)), skip=self.auto['skip'],
+                    mission_seen=self.auto['mission_seen'], waiting=self.auto['waiting'],
+                    stops_in_s=None if since is None else max(0.0, round(AUTO_STOP_GRACE_S - (now - since))))
 
     # ---------- persistence (last location / drone count) ----------
     def _load(self):
@@ -83,7 +179,8 @@ class SimControl:
             log = list(self.log)
             return dict(state=self.state, message=self.message, components=comps,
                         settings=self.settings, log=log[-12:], launcher=str(SIM_SH),
-                        launcher_found=SIM_SH.is_file(), progress=self.progress(log, comps))
+                        launcher_found=SIM_SH.is_file(), progress=self.progress(log, comps),
+                        auto_stop=self.auto_status_locked())
 
     def progress(self, log, comps):
         """Start-up stages for the GCS loading window, from the launcher output and the PX4 log."""
@@ -123,6 +220,7 @@ class SimControl:
             if self.state in ('starting', 'stopping'):
                 raise RuntimeError(f'Simulation is {self.state}')
             self.state, self.message, self.last_action = 'starting', 'Preparing the arena…', 'start'
+            self._reset_auto()
             self.log.clear()
             self.settings.update(drones=drones, home=[lat, lon, alt], show3d=bool(show3d), cameras=bool(cameras))
             self._save()
@@ -221,11 +319,12 @@ class SimControl:
             raise RuntimeError('The simulation is not running')
         self._run('gui', timeout=20)
 
-    def stop(self):
+    def stop(self, reason=''):
         with self.lock:
             if self.state == 'stopping':
                 return
             self.state, self.message = 'stopping', 'Stopping the simulation…'
+            self.auto.update(done_since=None, waiting='')
         def run():
             try:
                 self._run('stop', timeout=120)
@@ -234,7 +333,8 @@ class SimControl:
                     self.log.append(str(exc))
             with self.lock:
                 self.state = 'idle'
-                self.message = 'Simulation stopped (Gazebo window was closed)' if 'Gazebo' in self.message else 'Stopped'
+                self.message = reason or ('Simulation stopped (Gazebo window was closed)' if 'Gazebo' in self.message else 'Stopped')
+                self.log.append(self.message)
         threading.Thread(target=run, daemon=True).start()
 
     def cameras(self):

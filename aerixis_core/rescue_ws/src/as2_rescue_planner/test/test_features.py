@@ -259,3 +259,20 @@ def test_delivery_needs_geotagging_search_drones():
         plan_mission(dict(kml=KML.read_text(), fleet=fleet, mission_id=uuid.uuid4().hex, template='custom',
                           features=dict(type='coverage', detect=True, geotag=False, orbit=True, resume=True),
                           altitude_m=15, spacing_m=15, speed_mps=1.5))
+
+
+# Height layers (2026-11-01): a delivery drone at the search height came within the separation
+# margin of a search drone and ended its search; delivery drones now fly their own layer.
+def takeoff_height(xml_text):
+    return float(next(ET.fromstring(xml_text).iter('ManagedTakeoff')).get('height'))
+
+
+def test_delivery_drones_fly_above_the_search_drones():
+    result = plan_roles(['search', 'search', 'delivery', 'delivery'])
+    assert result['complete'], result['reason']
+    assert takeoff_height(result['xml']['drone0']) == 15.0
+    assert takeoff_height(result['xml']['drone2']) == 20.0                # 15 + DELIVERY_LAYER_M
+    lowered = plan_roles(['search', 'delivery'], delivery_altitude_m=9)
+    assert takeoff_height(lowered['xml']['drone1']) == 9.0
+    with pytest.raises(ValueError, match='Delivery flight height'):
+        plan_roles(['search', 'delivery'], delivery_altitude_m=80)

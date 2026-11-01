@@ -2,6 +2,8 @@
 from dataclasses import dataclass
 import math
 
+GROUND_SPEED_MPS=0.3   # a take-off slower than this has not left the ground yet
+
 @dataclass(frozen=True)
 class Limits:
     max_age_s: float = 0.5
@@ -68,6 +70,10 @@ class Safety:
         if v is None:
             last=e.get('vehicle',l.ground_vehicle_max_age_s)
             if last and last.get('platform_state') in (0,1):v=last
+            # SITL 2026-11-01: a 1 s data gap (simulation stalled under a 4-drone start) cancelled a
+            # take-off that was still spooling up on the ground. TAKING_OFF (2) before the aircraft
+            # moves is still on the ground: same grace. Once it climbs the normal limit applies.
+            elif last and last.get('platform_state')==2 and finite(last.get('speed')) and last['speed']<GROUND_SPEED_MPS:v=last
         fix=e.get('fix',l.max_age_s);zone=e.get('zone',l.max_age_s);payload=e.get('payload',l.max_age_s)
         flight=bool(v and v.get('position_valid') is True and v.get('connected') is True and
             all(finite(v.get(k)) for k in ('speed','tilt_deg','body_rate_dps','vibration_rms','battery')))

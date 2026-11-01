@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- 2026-11-01: masses set to the real A8 mini (~95 g for the whole gimbal; was 0.4 kg, which left the
+     simulated x500 at ~80 % hover thrust and made take-offs fail under load); inertias scaled with them. -->
 <sdf version='1.9'>
   <model name='gimbal_a8'>
     <self_collide>false</self_collide>
@@ -8,14 +10,14 @@
     <link name="cgo3_mount_link">
       <inertial>
         <pose>-0.02552 0 -0.08136 0 0 0</pose>
-        <mass>0.1</mass>
+        <mass>0.024</mass>
         <inertia>
-          <ixx>0.001</ixx>
+          <ixx>0.00024</ixx>
           <ixy>0</ixy>
           <ixz>0</ixz>
-          <iyy>0.001</iyy>
+          <iyy>0.00024</iyy>
           <iyz>0</iyz>
-          <izz>0.001</izz>
+          <izz>0.00024</izz>
         </inertia>
       </inertial>
       <visual name="cgo3_mount_visual">
@@ -37,14 +39,14 @@
     <link name="cgo3_vertical_arm_link">
       <inertial>
         <pose>0 0 -0.1283 0 0 0</pose>
-        <mass>0.1</mass>
+        <mass>0.024</mass>
         <inertia>
-          <ixx>0.001</ixx>
+          <ixx>0.00024</ixx>
           <ixy>0</ixy>
           <ixz>0</ixz>
-          <iyy>0.001</iyy>
+          <iyy>0.00024</iyy>
           <iyz>0</iyz>
-          <izz>0.001</izz>
+          <izz>0.00024</izz>
         </inertia>
       </inertial>
       <visual name='cgo3_vertical_arm_visual'>
@@ -94,14 +96,14 @@
     <link name="cgo3_horizontal_arm_link">
       <inertial>
         <pose>-0.0213 0 -0.162 0 0 0</pose>
-        <mass>0.1</mass>
+        <mass>0.024</mass>
         <inertia>
-          <ixx>0.001</ixx>
+          <ixx>0.00024</ixx>
           <ixy>0</ixy>
           <ixz>0</ixz>
-          <iyy>0.001</iyy>
+          <iyy>0.00024</iyy>
           <iyz>0</iyz>
-          <izz>0.001</izz>
+          <izz>0.00024</izz>
         </inertia>
       </inertial>
       <visual name='cgo3_horizontal_arm_visual'>
@@ -151,14 +153,14 @@
     <link name="camera_link">
       <inertial>
         <pose>-0.0412 0 -0.162 0 0 0</pose>
-        <mass>0.1</mass>
+        <mass>0.024</mass>
         <inertia>
-          <ixx>0.001</ixx>
+          <ixx>0.00024</ixx>
           <ixy>0</ixy>
           <ixz>0</ixz>
-          <iyy>0.001</iyy>
+          <iyy>0.00024</iyy>
           <iyz>0</iyz>
-          <izz>0.001</izz>
+          <izz>0.00024</izz>
         </inertia>
       </inertial>
       <collision name='cgo3_camera_collision'>

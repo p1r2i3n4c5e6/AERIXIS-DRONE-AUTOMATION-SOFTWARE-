@@ -98,10 +98,12 @@ public:
    * @return True if the service was called successfully, false otherwise
    */
 
-  bool sendRequest(const RequestT & req, ResponseT & resp, int wait_time = 0)
+  bool sendRequest(
+    const RequestT & req, ResponseT & resp, int wait_time = 0,
+    std::chrono::nanoseconds response_timeout = std::chrono::nanoseconds(-1))
   {
     auto resp_ptr = std::make_shared<ResponseT>(resp);
-    if (!sendRequest(std::make_shared<RequestT>(req), resp_ptr, wait_time)) {
+    if (!sendRequest(std::make_shared<RequestT>(req), resp_ptr, wait_time, response_timeout)) {
       return false;
     }
     resp = *resp_ptr.get();
@@ -115,8 +117,15 @@ public:
    * @param wait_time Time to wait for the service to be available in seconds
    * @return True if the service was called successfully, false otherwise
    */
+  /**
+   * @param response_timeout How long to wait for the response once the request is sent;
+   * negative (default) waits forever. A response lost on a loaded computer otherwise blocks
+   * the caller for good (SITL 2026-11-01: a take-off froze in "Setting control mode" and
+   * ignored its cancel). On timeout the pending request is dropped and false is returned.
+   */
   bool sendRequest(
-    const std::shared_ptr<RequestT> & req, std::shared_ptr<ResponseT> & resp, int wait_time = 0)
+    const std::shared_ptr<RequestT> & req, std::shared_ptr<ResponseT> & resp, int wait_time = 0,
+    std::chrono::nanoseconds response_timeout = std::chrono::nanoseconds(-1))
   {
     if (wait_time <= 0) {
       while (!service_client_->wait_for_service(std::chrono::seconds(1))) {
@@ -143,9 +152,10 @@ public:
 
     auto result = service_client_->async_send_request(req);
     if (
-      callback_group_executor_.spin_until_future_complete(result) !=
+      callback_group_executor_.spin_until_future_complete(result, response_timeout) !=
       rclcpp::FutureReturnCode::SUCCESS)
     {
+      service_client_->remove_pending_request(result);
       RCLCPP_WARN(
         node_->get_logger(), "failed to receive response from service '%s'", service_name_.c_str());
       return false;

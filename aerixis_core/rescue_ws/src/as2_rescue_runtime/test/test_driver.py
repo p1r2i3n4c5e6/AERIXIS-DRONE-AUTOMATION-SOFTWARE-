@@ -44,7 +44,7 @@ class DriverTests(unittest.TestCase):
         here=SimpleNamespace(x=-38.7,y=0.02,z=15.0)
         driver.node=SimpleNamespace(raw={'pose':(SimpleNamespace(header=SimpleNamespace(frame_id='earth'),
                                                                  pose=SimpleNamespace(position=here)),0.0)},
-                                    get_clock=lambda:SimpleNamespace(now=lambda:SimpleNamespace(to_msg=__import__('builtin_interfaces.msg',fromlist=['Time']).Time)))
+                                    get_clock=lambda:SimpleNamespace(now=lambda:SimpleNamespace(nanoseconds=0,to_msg=__import__('builtin_interfaces.msg',fromlist=['Time']).Time)))
         driver.stop()                                         # leg ends: HOVER, cached mode still SPEED
         sent.clear()
         self.assertFalse(driver.velocity([1.0,0.0,0.0],3.1,'earth'))
@@ -57,6 +57,26 @@ class DriverTests(unittest.TestCase):
         # No measured position in that frame: nothing is sent.
         sent.clear()
         self.assertFalse(driver.velocity([1.0,0.0,0.0],3.1,'drone1/odom'));self.assertEqual(sent,[])
+    def test_velocity_reference_is_acceleration_limited(self):
+        # SITL 2026-11-01: a step from hover to 2.8 m/s tilted the drone past 45 deg/s (abort).
+        from as2_rescue_runtime.runtime_node import VELOCITY_ACCEL_MPS2
+        clock=SimpleNamespace(t=100.0)
+        driver=RosDriver.__new__(RosDriver)
+        driver.node=SimpleNamespace(get_clock=lambda:SimpleNamespace(now=lambda:SimpleNamespace(nanoseconds=int(clock.t*1e9))),
+                                    evidence=SimpleNamespace(get=lambda key,age=None:dict(velocity=[0.5,0.0,0.0])))
+        driver.ramp=None
+        self.assertEqual(driver.ramped([2.0,2.0,0.3]),[0.5,0.0,0.3])     # starts from the measured velocity
+        speeds=[]
+        for _ in range(60):
+            clock.t+=0.05;speeds.append(driver.ramped([2.0,2.0,0.3]))
+        steps=[((b[0]-a[0])**2+(b[1]-a[1])**2)**.5 for a,b in zip(speeds,speeds[1:])]
+        self.assertLessEqual(max(steps),VELOCITY_ACCEL_MPS2*0.05+1e-9)
+        self.assertEqual(speeds[-1],[2.0,2.0,0.3])                      # reaches the command
+        clock.t+=5.0                                                     # a long pause: one bounded step
+        before=list(speeds[-1]);after=driver.ramped([-2.0,-2.0,0.0])
+        self.assertLessEqual(((after[0]-before[0])**2+(after[1]-before[1])**2)**.5,VELOCITY_ACCEL_MPS2*0.25+1e-9)
+        driver.ramp=None;driver.node.evidence=None                       # stop() resets; unknown speed = 0
+        self.assertEqual(driver.ramped([1.0,0.0,0.0]),[0.0,0.0,0.0])
     def test_repeated_stop_preserves_successful_hold_ack(self):
         driver=RosDriver.__new__(RosDriver);driver.stopping=False;driver.hover_ok=True
         driver.stop();self.assertFalse(driver.hover_ok)

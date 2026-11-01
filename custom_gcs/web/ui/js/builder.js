@@ -26,6 +26,8 @@ export function openBuilder({ copyOf = null, record = null, copy = false, values
   const editing = record && !copy ? record : null;
   const opts = { orbit_radius_m: record?.options?.orbit_radius_m ?? values.orbit_radius_m ?? 10, orbit_laps: record?.options?.orbit_laps ?? values.orbit_laps ?? 2 };
   let step = 0, error = '', describeSeq = 0;
+  // Delivery drones (2026-11-01): a fleet choice, kept outside the feature spec.
+  let delivery = !!record?.delivery_drones;
   const name = h('input', { maxlength: 60, placeholder: 'e.g. Night coverage without camera', value: editing ? record.name : record ? `${record.name} (copy)` : copyOf ? `${copyOf.title} (my copy)` : '' });
   const notes = h('input', { maxlength: 500, placeholder: 'optional — what this mission is for', value: record?.notes || '' });
   const radius = h('input', { type: 'number', min: 3, max: 100, step: 'any', value: opts.orbit_radius_m });
@@ -83,7 +85,14 @@ export function openBuilder({ copyOf = null, record = null, copy = false, values
         toggle('Orbit the person', 'Circle the person, camera kept on them', 'orbit', !f.detect ? 'Needs detection' : track,
           h('div', { class: 'fields', style: { marginTop: '6px' } }, h('label', { class: 'field' }, 'Radius (m)', radius, h('small', {}, '3 … 100')),
             h('label', { class: 'field' }, 'Laps', laps, h('small', {}, '0.25 … 20')))),
-        toggle('Continue searching', 'After each person: release the lock and resume (otherwise the mission ends)', 'resume', !f.detect ? 'Needs detection' : '')];
+        toggle('Continue searching', 'After each person: release the lock and resume (otherwise the mission ends)', 'resume', !f.detect ? 'Needs detection' : ''),
+        h('div', { class: 'kicker', style: { margin: '10px 0 4px' } }, 'Fleet'),
+        (() => {
+          const dis = f.type !== 'coverage' || !f.geotag ? 'Needs area coverage with geotag' : '';
+          return h('div', { class: `tgl ${delivery && !dis ? 'on' : ''} ${dis ? 'dis' : ''}` },
+            h('label', {}, h('input', { type: 'checkbox', checked: delivery && !dis, disabled: !!dis, onchange: e => { delivery = e.target.checked; render(); } }),
+              h('span', {}, h('b', {}, 'Delivery drones'), h('small', {}, dis || 'Other aircraft wait with packages and fly to every geotag, one package per person, until their packages run out. You choose which aircraft search and which deliver when planning.'))));
+        })()];
     }
     return [
       h('h4', {}, 'When the mission ends'), h('div', { class: 'choices' },
@@ -134,7 +143,8 @@ export function openBuilder({ copyOf = null, record = null, copy = false, values
     save.classList.add('busy');
     try {
       const rec = await saveMission({ id: editing && !asNew ? record.id : undefined, name: name.value.trim(), features: f, options,
-        notes: notes.value.trim(), based_on: copyOf?.id || record?.based_on || '' });
+        notes: notes.value.trim(), based_on: copyOf?.id || record?.based_on || '',
+        delivery_drones: delivery && f.type === 'coverage' && f.geotag });
       toast('Mission saved', `${rec.name} — selected in Plan`, 'ok');
       close(); onSaved?.(rec);
     } catch (e) { toast('Not saved', e.message, 'bad', 10000); }

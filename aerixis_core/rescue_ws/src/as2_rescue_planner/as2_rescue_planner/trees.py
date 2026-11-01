@@ -24,6 +24,10 @@ VISION_MODES = {
     'human_geotag_drop_resume': 'Mission 4 - Geotag, drop payload over the person, resume',
     'swarm_coverage': 'Mission 5 - Swarm area coverage only',
 }
+# Delivery drones fly this far above the search drones by default (height layers, 2026-11-01);
+# 5 m keeps a 15 m search inside the usual 5..20 m drop window (delivery at 20 m).
+DELIVERY_LAYER_M = 5.0
+
 VISION_DEFAULTS = dict(search_pitch_deg=-45.0, lost_timeout_s=3.0, track_duration_s=0.0,
                        orbit_radius_m=10.0, orbit_laps=2.0, orbit_speed=1.0,
                        approach_speed=1.0, rtl_speed=2.0, suppress_s=8.0, mesh_wait_s=30.0,

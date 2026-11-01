@@ -36,7 +36,9 @@
 #ifndef AS2_MOTION_CONTROLLER__CONTROLLER_HANDLER_HPP_
 #define AS2_MOTION_CONTROLLER__CONTROLLER_HANDLER_HPP_
 
+#include <cmath>
 #include <memory>
+#include <utility>
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -140,6 +142,25 @@ std::vector<std::pair<uint8_t, uint8_t>> findModePairs(
  * not own the plugin nor the TfHandler: both are injected by the
  * ControllerManager.
  */
+/**
+ * Horizontal offset of the hover point for a drone moving at (vx, vy): ahead_s seconds of travel,
+ * at most max_m metres; (0, 0) for a non-finite velocity or ahead_s <= 0. With a position gain of
+ * 1/ahead_s the controller's first velocity command then equals the current velocity (no step).
+ */
+inline std::pair<double, double> hoverStopOffset(double vx, double vy, double ahead_s, double max_m)
+{
+  if (!(ahead_s > 0.0) || !std::isfinite(vx) || !std::isfinite(vy)) {
+    return {0.0, 0.0};
+  }
+  double dx = vx * ahead_s, dy = vy * ahead_s;
+  const double d = std::hypot(dx, dy);
+  if (d > max_m && d > 0.0) {
+    dx *= max_m / d;
+    dy *= max_m / d;
+  }
+  return {dx, dy};
+}
+
 class ControllerHandler
 {
 public:
@@ -259,6 +280,10 @@ private:
   bool ref_thrust_acquired_ = false;
   bool state_acquired_ = false;
   bool use_bypass_ = false;
+  // Hover while moving: the hover point is placed this far ahead in time along the horizontal
+  // velocity (capped at hover_stop_max_m), so the drone brakes smoothly instead of all at once.
+  double hover_stop_ahead_s_ = 1.0;
+  double hover_stop_max_m_ = 5.0;
   bool bypass_controller_ = false;
 
   uint8_t preferred_output_mode_ = 0b00000000;  // by default, no output mode is preferred
@@ -298,6 +323,11 @@ private:
    * @param msg Latest twist message published by the localization stack.
    */
   void stateCallback(const geometry_msgs::msg::TwistStamped::SharedPtr msg);
+  /** Hover point for the current state: ahead along the horizontal velocity by
+   *  hover_stop_ahead_s (at most hover_stop_max_m), so a moving drone brakes smoothly. */
+  geometry_msgs::msg::Point hoverPoint(
+    const geometry_msgs::msg::PoseStamped & pose,
+    const geometry_msgs::msg::TwistStamped & twist) const;
 
   /**
    * @brief Subscription callback for `motion_reference/pose`.

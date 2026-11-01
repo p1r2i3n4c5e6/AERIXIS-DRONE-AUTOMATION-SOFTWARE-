@@ -76,6 +76,11 @@ class MissionStore:
                 for k, v in options.items()):
             raise ValueError('Mission parameters must be numbers')
         notes = str(request.get('notes') or '')[:500]
+        # Delivery drones (2026-11-01): other aircraft of the fleet wait with packages and fly to
+        # every geotag (chosen per flight on the Plan page). Needs lanes and geotagging.
+        delivery = request.get('delivery_drones') is True
+        if delivery and not (spec['type'] == 'coverage' and spec['geotag']):
+            raise ValueError('Delivery drones need an area-coverage mission that geotags people')
         key = request.get('id') or ''
         with self.lock:
             existing = {r['id']: r for r in self.custom()}
@@ -89,7 +94,7 @@ class MissionStore:
             if any(r['name'].lower() == name.lower() and r['id'] != key for r in existing.values()):
                 raise ValueError('Another saved mission already has this name')
             record = dict(id=key, name=name, features=spec, options={k: float(v) for k, v in options.items()},
-                          notes=notes, based_on=str(request.get('based_on') or '')[:40],
+                          notes=notes, based_on=str(request.get('based_on') or '')[:40], delivery_drones=delivery,
                           created=existing.get(key, {}).get('created', time.time()), updated=time.time())
             self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             path = self.directory / (key + '.json')

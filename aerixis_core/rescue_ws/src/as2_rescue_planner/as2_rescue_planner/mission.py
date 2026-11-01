@@ -36,7 +36,7 @@ def station_for(region,waypoints):
 def plan_mission(request):
     # Trees are owned by this package (trees.py) so the planner depends on
     # nothing from the runtime, keeping the package graph acyclic.
-    from .trees import mission, vision_mission, delivery_mission, search_sweep, VISION_DEFAULTS, VISION_MODES, END_ACTIONS, xml
+    from .trees import mission, vision_mission, delivery_mission, search_sweep, VISION_DEFAULTS, VISION_MODES, END_ACTIONS, xml, DELIVERY_LAYER_M
     from .features import custom_mission, feature_spec
     document=request.get('kml')
     if not isinstance(document,str) or len(document.encode())>1_000_000:
@@ -145,7 +145,14 @@ def plan_mission(request):
                 estimated_duration_s=float(request.get('search_time_s') or 600))
         if item['drone_id'] in delivery_ids:
             options={k:float(request[k]) for k in VISION_OPTIONS if request.get(k) is not None}
-            xmls[item['drone_id']]=xml(delivery_mission(altitude,request.get('swarm_id') or identity,fleet_size=len(fleet),
+            # Height layers (SITL 2026-11-01: a delivery drone flying to a geotag at the search
+            # height came within the separation margin of the search drone, which ended its search).
+            # Delivery drones fly DELIVERY_LAYER_M above the search drones unless the operator
+            # sets delivery_altitude_m; separation counts a clear height difference (swarm.py).
+            layer=request.get('delivery_altitude_m')
+            delivery_altitude=float(layer) if layer not in (None,'',0) else min(50.0,float(altitude)+DELIVERY_LAYER_M)
+            if not 1<=delivery_altitude<=50:raise ValueError('Delivery flight height must be 1..50 m')
+            xmls[item['drone_id']]=xml(delivery_mission(delivery_altitude,request.get('swarm_id') or identity,fleet_size=len(fleet),
                 emergency=emergency,finish=spec['finish'],**options))
             item.update(region=region_data,origin=origin,xml_sha256=hashlib.sha256(xmls[item['drone_id']].encode()).hexdigest(),
                 delivery_policy=dict(drop_mode='overhead',overhead_authorized=True,planned_waypoint=False,target_id='geotag'))

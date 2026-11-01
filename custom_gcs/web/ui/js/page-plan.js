@@ -8,6 +8,7 @@ import { parseXml, countNodes, loadCatalog } from './tree.js';
 import { gnss } from './dronecard.js';
 import { catalog, isCustom, customById, emergencyAction, setEmergencyAction, deleteMission } from './missions.js';
 import { openBuilder } from './builder.js';
+import { saveMission } from './missions.js';
 
 // Option catalogue: [key, label, default, min, max, remembered-as (default: key)]
 const O = {
@@ -27,6 +28,8 @@ const O = {
   approach_speed: ['approach_speed', 'Approach speed (m/s)', 1, 0.2, 2],
   delivery_wait_s: ['delivery_wait_s', 'Delivery drones wait for a geotag up to (s)', 1500, 10, 1800],
   delivery_speed: ['delivery_speed', 'Delivery flight speed (m/s)', 1.5, 0.3, 3],
+  // Height layers (2026-11-01): delivery drones fly above the search drones so they never meet.
+  delivery_altitude_m: ['delivery_altitude_m', 'Delivery flight height (m, 0 = 5 m above the search height)', 0, 0, 50],
   // Camera field of view for the straight-down search sweep: 0 = what each drone reports.
   camera_hfov_deg: ['camera_hfov_deg', 'Camera horizontal field of view (°, 0 = from the drone)', 0, 0, 170],
   camera_vfov_deg: ['camera_vfov_deg', 'Camera vertical field of view (°, 0 = from the drone)', 0, 0, 170],
@@ -93,7 +96,7 @@ export const MISSIONS = [
   { id: 'search_deliver', n: 7, title: 'Search, geotag & deliver', ic: 'gift', auto: true, roleChoice: true, delivers: true,
     summary: 'Search drones geotag people; delivery drones get the geotags over the mesh, split them and drop a package to each.',
     features: { camera: true, payload: false, type: 'coverage', detect: true, geotag: true, orbit: false, drop: false, resume: true, finish: 'RTL', emergency: 'RTL' },
-    options: ['altitude_m', 'spacing_m', 'speed_mps', 'heading_deg', 'corridor_m', 'search_pitch_nadir', 'camera_hfov_deg', 'camera_vfov_deg', 'lost_timeout_s', 'approach_speed', 'delivery_wait_s', 'delivery_speed', 'airborne_wait_s', 'rtl_speed'],
+    options: ['altitude_m', 'spacing_m', 'speed_mps', 'heading_deg', 'corridor_m', 'search_pitch_nadir', 'camera_hfov_deg', 'camera_vfov_deg', 'lost_timeout_s', 'approach_speed', 'delivery_wait_s', 'delivery_speed', 'delivery_altitude_m', 'airborne_wait_s', 'rtl_speed'],
     requires: [...VISION_REQ, GNSS_REQ],
     does: ['No Generate step: set the area, accept the conditions and choose each aircraft\'s role — it plans and assigns by itself.',
       'Search drones share the area, camera straight down and sweeping sideways, and geotag every person beside their lanes (as mission 3).',
@@ -130,9 +133,12 @@ export { O as OPTION_CATALOGUE };
 
 /** Mission descriptor for a saved custom mission (same shape as MISSIONS entries). */
 function customMission(rec) {
-  const f = rec.features;
-  return { id: rec.id, n: 'C', custom: true, record: rec, title: rec.name, ic: f.orbit ? 'orbit' : f.geotag ? 'pin' : f.type === 'track' ? 'person' : 'grid',
-    summary: summaryOf(f), options: optionsFor(f), features: f,
+  const f = rec.features, deliver = !!rec.delivery_drones;
+  return { id: rec.id, n: 'C', custom: true, record: rec, title: rec.name, ic: deliver ? 'gift' : f.orbit ? 'orbit' : f.geotag ? 'pin' : f.type === 'track' ? 'person' : 'grid',
+    // Delivery drones: the Plan page asks each aircraft's role (search / delivery), as mission 7.
+    roleChoice: deliver, delivers: deliver,
+    summary: summaryOf(f) + (deliver ? ' · delivery drones bring packages to every geotag' : ''),
+    options: [...optionsFor(f), ...(deliver ? ['delivery_wait_s', 'delivery_speed', 'delivery_altitude_m', 'airborne_wait_s'] : [])], features: f,
     requires: [...(f.detect ? VISION_REQ : []), ...(f.geotag ? [GNSS_REQ] : []), ...(f.drop ? [PAYLOAD_REQ] : [])],
     does: rec._does || [summaryOf(f)],
     limits: [...(f.detect ? ['Only people inside the KML area count; the tracker picks the person nearest the image centre.'] : ['No camera use.']),
@@ -226,6 +232,33 @@ export const page = {
     this.pick(MISSIONS.some(m => m.id === store.missionType) || isCustom(store.missionType) ? store.missionType : 'human_geotag_resume', true);
   },
   shown() { this.map?.resize(); this.renderFleet(); this.renderOrbit(); },
+  /** Put a plan from the AI planner into this form (mission, parameters, roles, emergency). The
+   *  operator still reads and accepts the conditions; the planner then makes the trees. */
+  async applyAiPlan(p) {
+    let id = p.mission;
+    if (id === 'custom') {
+      const taken = new Set(catalog.custom.map(r => r.name.toLowerCase()));
+      let name = `AI ${p.custom_name || 'mission'}`.slice(0, 52);
+      if (taken.has(name.toLowerCase())) name = `${name} ${new Date().toTimeString().slice(0, 5)}`;
+      const options = Object.fromEntries(Object.entries(p.params || {}).filter(([n]) => O[n]).map(([n, v]) => [O[n][0], v]));
+      const rec = await saveMission({ name, features: { ...p.features, emergency: p.emergency }, options,
+        delivery_drones: !!p.delivery_drones, notes: 'Planned with the offline AI planner' });
+      id = rec.id;
+    }
+    if (!(MISSIONS.some(m => m.id === id) || isCustom(id))) throw new Error(`Unknown mission ${id}`);
+    this.pick(id, true);
+    for (const [name, value] of Object.entries(p.params || {})) {
+      const spec = O[name]; if (!spec) continue;
+      const [key, , , , , remembered = key] = spec;
+      prefs.set('opt.' + remembered, value);
+      const input = this.inputs[key + ':' + name]; if (input) input.value = value;
+    }
+    if (Object.keys(p.roles || {}).length) prefs.set('droneRoles', { ...(prefs.get('droneRoles', {}) || {}), ...p.roles });
+    if (p.orbit_drones?.length) prefs.set('orbitDrones', p.orbit_drones);
+    setEmergencyAction(p.emergency, id);
+    this.renderEmergency(); this.renderOrbit(); this.renderTerms();
+    this.termsCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  },
   mission() {
     if (isCustom(store.missionType)) {
       const rec = customById(store.missionType);

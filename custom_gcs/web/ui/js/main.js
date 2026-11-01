@@ -12,9 +12,11 @@ import { watchEmergency, openEmergency, emergencyShown } from './emergency.js';
 import { loadMissions, catalog } from './missions.js';
 import { track } from './btlog.js';
 import { watchReconcile, autoReconcile } from './autoreconcile.js';
-import { mountFlightControls, update as updateFlightControls } from './flightctl.js?v=16';
+import { mountFlightControls, update as updateFlightControls } from './flightctl.js';
 import { onboardCalButton } from './onboardcal.js?v=14';
 import { setupAppearance } from './appearance.js?v=1';
+import { createAiPlanner } from './aiplanner.js';
+import { MISSIONS, OPTION_CATALOGUE } from './page-plan.js';
 
 const PAGES = [connect, ready, plan, upload, live, logs];
 // Each workspace has its own colour (icon, active card, page accents, primary buttons).
@@ -41,6 +43,8 @@ function build() {
   // After Logs & data: the drone's onboard panel, full window (not a workflow step).
   nav.append(onboardCalButton());
   mountFlightControls($('#flight-controls'));
+  // AERIXIS Copilot (2026-11-01): the floating mission-planning chat, on every page.
+  document.body.append(createAiPlanner(plan, { MISSIONS, O: OPTION_CATALOGUE }).root);
   $('#foot').innerHTML = '';
   $('#foot').append(h('small', { id: 'foot-sub' }, 'Plan locally · execute onboard'),
     h('button', { class: 'side-btn', onclick: () => { location.hash = '#connect'; } }, 'Configure link ↗'),

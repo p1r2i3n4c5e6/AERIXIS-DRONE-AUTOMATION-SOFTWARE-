@@ -220,6 +220,36 @@ class AvoidanceLayerTests(unittest.TestCase):
                 break
         self.assertIn('No climb', result['reason'])
 
+    def climb_on_fc_clock(self, rate, seconds):
+        """Take-off that never climbs while the FC clock runs at `rate` x this computer's clock.
+        Returns (result, wall seconds waited)."""
+        self.put(position=(0.0, 0.0, 0.2), velocity=(0.0, 0.0, 0.0))
+        self.d.vertical = lambda op, height, speed: None
+        self.engine.submit(dict(schema_version=1, stamp=self.clock(), mission_id='m', run_id='r', command_id='to',
+                                operation='ManagedTakeoff', height=15, speed=0.5, timeout_s=300))
+        start, fc = self.clock.value, 500.0
+        for _ in range(int(seconds * 10)):
+            self.clock.value += 0.1
+            fc += 0.1 * rate
+            self.put(position=(0.0, 0.0, 0.3), velocity=(0.0, 0.0, 0.0))
+            self.e.get('vehicle').update(armed=True, fc_time_s=round(fc * 2) / 2)   # 0.5 s steps, as PX4 sends
+            result = self.engine.tick()
+            if result:
+                return result, self.clock.value - start
+        return None, self.clock.value - start
+
+    def test_slow_simulation_take_off_waits_on_the_fc_clock(self):
+        # SITL 2026-11-01: Gazebo at ~0.4x real time; PX4 was lifting off when 20 s of wall time ended it.
+        result, waited = self.climb_on_fc_clock(0.4, 70)
+        self.assertIn('No climb', result['reason'])
+        self.assertGreater(waited, 48.0)                        # 20 s for the FC = 50 s here
+        self.assertLess(waited, 53.0)
+
+    def test_a_frozen_fc_clock_still_ends_the_take_off(self):
+        result, waited = self.climb_on_fc_clock(0.0, 80)
+        self.assertIn('No climb', result['reason'])
+        self.assertLess(waited, 61.0)
+
     def test_landing_after_an_ai_return_waits_for_the_velocity_handover(self):
         self.put()
         self.d.idle = False                                    # velocity mode still handing back

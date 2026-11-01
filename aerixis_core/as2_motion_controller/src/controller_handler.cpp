@@ -34,6 +34,8 @@
  ********************************************************************************************/
 
 #include "as2_motion_controller/controller_handler.hpp"
+#include <cmath>
+#include <algorithm>
 #include "as2_motion_controller/param_utils.hpp"
 
 #include <as2_core/utils/tf_utils.hpp>
@@ -93,6 +95,8 @@ ControllerHandler::ControllerHandler(
 : controller_ptr_(controller), node_ptr_(node), tf_handler_(tf_handler)
 {
   use_bypass_ = node_ptr_->getParameter<bool>("use_bypass", false);
+  hover_stop_ahead_s_ = std::clamp(node_ptr_->getParameter<double>("hover_stop_ahead_s", 1.0), 0.0, 3.0);
+  hover_stop_max_m_ = std::clamp(node_ptr_->getParameter<double>("hover_stop_max_m", 5.0), 0.0, 20.0);
   base_frame_id_ = node_ptr_->getBaseFrameId();
 
   // Frames the plugin overrides from setMode(), once a control mode is set
@@ -222,6 +226,21 @@ void ControllerHandler::reset()
   ref_thrust_acquired_ = false;
 }
 
+geometry_msgs::msg::Point ControllerHandler::hoverPoint(
+  const geometry_msgs::msg::PoseStamped & pose, const geometry_msgs::msg::TwistStamped & twist) const
+{
+  geometry_msgs::msg::Point point = pose.pose.position;
+  // Only when the velocity is expressed in the same frame as the position.
+  if (pose.header.frame_id != twist.header.frame_id) {
+    return point;
+  }
+  const auto [dx, dy] = hoverStopOffset(
+    twist.twist.linear.x, twist.twist.linear.y, hover_stop_ahead_s_, hover_stop_max_m_);
+  point.x += dx;
+  point.y += dy;
+  return point;
+}
+
 void ControllerHandler::stateCallback(
   const geometry_msgs::msg::TwistStamped::SharedPtr _twist_msg)
 {
@@ -244,7 +263,14 @@ void ControllerHandler::stateCallback(
       if (hover_pending_) {
         // A hover is a reference frozen at the current state, fed through the same
         // hooks as any other so the plugin serves it with its own control law.
-        controller_ptr_->updateReference(state_pose_);
+        // While moving, the point is placed ahead along the horizontal velocity
+        // (2026-11-01, SITL: a search drone at 2 m/s told to hover at its own position
+        // braked so hard that its roll/pitch rate passed the 45 deg/s safety limit and
+        // the mission aborted). With the position gain of the PID controller (1/s) the
+        // first command then equals the current velocity: no step, an exponential stop.
+        geometry_msgs::msg::PoseStamped hover_pose = state_pose_;
+        hover_pose.pose.position = hoverPoint(state_pose_, state_twist_);
+        controller_ptr_->updateReference(hover_pose);
 
         geometry_msgs::msg::TwistStamped zero_twist;
         zero_twist.header = state_twist_.header;
@@ -253,9 +279,9 @@ void ControllerHandler::stateCallback(
         as2_msgs::msg::TrajectorySetpoints traj;
         traj.header = state_pose_.header;
         as2_msgs::msg::TrajectoryPoint point;
-        point.position.x = state_pose_.pose.position.x;
-        point.position.y = state_pose_.pose.position.y;
-        point.position.z = state_pose_.pose.position.z;
+        point.position.x = hover_pose.pose.position.x;
+        point.position.y = hover_pose.pose.position.y;
+        point.position.z = hover_pose.pose.position.z;
         point.yaw_angle = as2::frame::getYawFromQuaternion(state_pose_.pose.orientation);
         traj.setpoints.push_back(point);
         controller_ptr_->updateReference(traj);

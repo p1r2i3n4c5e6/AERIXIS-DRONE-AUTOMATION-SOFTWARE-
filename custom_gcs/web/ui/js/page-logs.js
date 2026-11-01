@@ -1,5 +1,5 @@
 // Step 6 — Logs & data: onboard and GCS logs, geotag export, link traffic, raw XML.
-import { h, icon, card, badge, store, fill, emptyState, rescueOf, linksOf, stripAnsi } from './core.js';
+import { h, icon, card, badge, store, fill, emptyState, rescueOf, linksOf, stripAnsi, api, toast } from './core.js';
 import { btLogView } from './btlog.js';
 import { archPanel } from './links.js';
 
@@ -20,7 +20,7 @@ export const page = {
   intro: 'Everything recorded during the mission: onboard executor log, GCS log, geotags to export, link traffic and the exact XML each drone received.',
   mount(root) {
     this.root = root; this.tab = 'bt'; this.drone = null; this.archPanels = new Map();
-    this.tabBar = h('div', { class: 'tabs' }, ...[['bt', 'BT execution'], ['onboard', 'Onboard log'], ['fc', 'Flight controller'], ['links', 'Links & data'], ['gcs', 'GCS log'], ['geotags', 'Geotags'], ['traffic', 'Link traffic'], ['xml', 'Tree XML']].map(([id, t]) =>
+    this.tabBar = h('div', { class: 'tabs' }, ...[['archive', 'Mission archive'], ['bt', 'BT execution'], ['onboard', 'Onboard log'], ['fc', 'Flight controller'], ['links', 'Links & data'], ['gcs', 'GCS log'], ['geotags', 'Geotags'], ['traffic', 'Link traffic'], ['xml', 'Tree XML']].map(([id, t]) =>
       h('button', { 'data-tab': id, class: id === this.tab ? 'active' : '', onclick: () => { this.tab = id; this.root.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === id)); this.update(store, true); } }, t)));
     this.body = h('div');
     this.droneSel = h('select', { onchange: () => { this.drone = this.droneSel.value; this.update(store, true); } });
@@ -35,7 +35,9 @@ export const page = {
     const now = Date.now(); if (!force && now - (this.last || 0) < 1500) return; this.last = now;
     const d = store.drone(this.drone);
     let content;
-    if (this.tab === 'bt') {
+    if (this.tab === 'archive') {
+      content = this.archiveView();
+    } else if (this.tab === 'bt') {
       content = h('div', {}, h('p', { class: 'faint', style: { margin: '0 0 8px', fontSize: '12px' } }, 'Every node change seen in this aircraft’s status updates (1 s while flying), newest first. The complete onboard event journal stays on the aircraft.'),
         d ? btLogView(d.drone_id, { limit: 400 }) : emptyState('tree', 'No aircraft', ''));
     } else if (this.tab === 'links') {
@@ -87,5 +89,29 @@ export const page = {
         h('textarea', { class: 'code', readonly: true, rows: 22 }, a.xml)) : emptyState('file', 'No tree for this drone', 'Generate one in step 3.');
     }
     fill(this.body, [content]);
+  },
+  /** Saved missions (GCS mission archive): mission time, results, folder. */
+  archiveView() {
+    if (Date.now() - (this.archiveAt || 0) > 4000) {
+      this.archiveAt = Date.now();
+      api('/api/archive').then(r => { this.archive = r; if (this.tab === 'archive') this.update(store, true); }).catch(() => {});
+    }
+    const r = this.archive, open = folder => api('/api/archive/open', folder ? { folder } : {}).catch(e => toast('Folder not opened', e.message, 'bad'));
+    if (!r) return h('p', { class: 'faint' }, 'Loading the mission archive…');
+    const cur = r.current || {}, rows = r.history || [];
+    const head = h('div', { class: 'row', style: { marginBottom: '10px', flexWrap: 'wrap', gap: '8px' } },
+      h('span', { class: 'faint', style: { fontSize: '12px' } }, `Every mission is saved in ${cur.root || '~/AERIXIS_Missions'} — Simulation/ and Real_Hardware/, one Mission_N folder per run, one folder per drone (track, geotags, events, uploaded tree${cur.copying ? '; copying simulation logs now…' : '; in simulation also the onboard and PX4 logs'}).`),
+      h('button', { class: 'btn sm', onclick: () => open(null), html: icon('folder') + 'Open archive folder' }));
+    const running = cur.running ? h('div', { class: 'archive-row' }, h('b', {}, `Mission ${cur.mission}`),
+      h('span', {}, badge('RUNNING', 'warn'), ` ${cur.mode} · ${cur.drones.map(d => `${d.label} ${d.duration}`).join(' · ')}`),
+      h('span', { class: 'mt-clock' }, cur.elapsed)) : null;
+    const list = rows.map(m => h('div', { class: 'archive-row' },
+      h('div', {}, h('b', {}, `Mission ${m.mission}`), h('div', { class: 'faint', style: { fontSize: '11px' } }, m.started)),
+      h('div', {}, badge(m.mode === 'Simulation' ? 'SIM' : 'REAL', m.mode === 'Simulation' ? 'info' : 'warn'),
+        ` ${m.geotags} geotags · ${m.packages_delivered} packages · `,
+        ...m.drones.map(d => h('span', { class: 'mt-drone', style: { marginRight: '4px' } }, `${d.label} ${d.duration} `, badge(d.result || '—', d.result === 'SUCCESS' ? 'ok' : 'bad')))),
+      h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: 'mt-clock', title: 'Mission time: first drone start to last drone end' }, m.mission_time),
+        h('button', { class: 'btn sm', onclick: () => open(m.folder) }, 'Open folder'))));
+    return h('div', {}, head, running, ...(list.length ? list : [running ? null : emptyState('logs', 'No saved missions yet', 'A mission is saved here when its drones finish.')]));
   },
 };
